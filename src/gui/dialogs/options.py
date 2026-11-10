@@ -1,0 +1,1218 @@
+"""
+Options dialog for MultiDeck Audio Player
+"""
+
+import wx
+import sys
+import sounddevice as sd
+from utils.i18n import _, I18n, get_i18n
+from config.defaults import LANGUAGE_NAMES, VALID_DECK_RANGE, RECORDING_FORMATS
+from utils.helpers import check_ffmpeg
+from m45wxcontrols import AccessibleListbook, AccessibleSpinCtrl
+
+from utils.logger import get_logger
+
+logger = get_logger('options')
+
+
+FFMPEG_AVAILABLE = check_ffmpeg()
+SYSTEM_LANGUAGE = I18n.SYSTEM_LANGUAGE
+
+
+class OptionsDialog(wx.Dialog):
+    """Options/Preferences dialog"""
+
+    def __init__(self, parent, config_manager, theme_manager=None):
+        """
+        Initialize options dialog.
+
+        Args:
+            parent: Parent window (MainFrame)
+            config_manager: ConfigManager instance
+            theme_manager: ThemeManager instance (optional)
+        """
+        super().__init__(parent, title=_("Options"),
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+
+        self.config_manager = config_manager
+        self.theme_manager = theme_manager
+        self.main_frame = parent
+        self._applied_sections = set()  # Track which sections were applied via Apply buttons
+        self._initial_device = config_manager.get('Audio', 'output_device', 'default')
+        self._initial_theme = config_manager.get('General', 'theme', 'system')
+        self._initial_tts_state = self._get_tts_manager_state()
+        self._create_ui()
+        self._fit_to_pages()
+        self.SetMinSize(self.GetSize())
+        self.Center()
+
+        # Apply theme to dialog if theme manager is available
+        if self.theme_manager:
+            self.theme_manager.apply_theme(self)
+
+        # Focus category list on dialog open
+        self.book.GetListBox().SetFocus()
+
+        if sys.platform != 'win32':
+            self.Bind(wx.EVT_SHOW, self._on_first_show)
+
+    # Tab name constants matching book page order
+    TAB_NAMES = ['general', 'audio', 'automation', 'recorder', 'streaming', 'tts']
+
+    def _on_first_show(self, event):
+        """Pre-size hidden pages after realization to avoid layout warnings on Linux."""
+        event.Skip()
+        if not event.IsShown():
+            return
+        self.Unbind(wx.EVT_SHOW)
+        sz = self.book.GetPageArea().GetClientSize()
+        if sz.width > 0 and sz.height > 0:
+            for index in range(self.book.GetPageCount()):
+                page = self.book.GetPage(index)
+                if not page.IsShown():
+                    page.SetSize(0, 0, sz.width, sz.height)
+                    page.Layout()
+
+    def _create_ui(self):
+        """Create dialog UI"""
+        panel = wx.Panel(self)
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        self.book = AccessibleListbook(panel, name=_("Categories"))
+        self.book.SetStaticLabel(_("Cate&gories"))
+        self.book.GetListBox().SetName(_("Categories"))
+        self.book.GetListBox().SetLabel(_("Categories"))
+
+        page_definitions = [
+            (_("General"), self._create_general_tab),
+            (_("Audio"), self._create_audio_tab),
+            (_("Automation"), self._create_automation_tab),
+            (_("Recorder"), self._create_recorder_tab),
+            (_("Streaming"), self._create_streaming_tab),
+            (_("Text-to-Speech"), self._create_tts_tab),
+        ]
+        for label, create_page in page_definitions:
+            self.book.AddPage(create_page(self.book.GetPageArea()), label)
+
+        main_sizer.Add(self.book, 1, wx.EXPAND | wx.ALL, 10)
+
+        # Buttons: OK, Cancel, Apply
+        button_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        button_sizer.AddStretchSpacer()
+        ok_button = wx.Button(panel, wx.ID_OK, label=_("&OK"))
+        ok_button.SetName(_("&OK"))
+        ok_button.SetDefault()
+        cancel_button = wx.Button(panel, wx.ID_CANCEL, label=_("&Cancel"))
+        cancel_button.SetName(_("&Cancel"))
+        self.apply_button = wx.Button(panel, wx.ID_APPLY, label=_("&Apply"))
+        self.apply_button.SetName(_("&Apply"))
+        self.apply_button.Disable()
+
+        button_sizer.Add(ok_button, 0, wx.ALL, 5)
+        button_sizer.Add(cancel_button, 0, wx.ALL, 5)
+        button_sizer.Add(self.apply_button, 0, wx.ALL, 5)
+
+        main_sizer.Add(button_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        panel.SetSizer(main_sizer)
+
+        # Snapshot initial control values for change detection
+        self._snapshot_initial_values()
+
+        # Bind buttons
+        ok_button.Bind(wx.EVT_BUTTON, self._on_ok)
+        cancel_button.Bind(wx.EVT_BUTTON, self._on_cancel)
+        self.apply_button.Bind(wx.EVT_BUTTON, self._on_apply)
+        self.Bind(wx.EVT_CLOSE, self._on_close)
+
+        # Update Apply button after the book switches pages
+        self.book.Bind(wx.EVT_LISTBOOK_PAGE_CHANGED, self._on_page_changed)
+
+        # Bind change events on all controls to update Apply button state
+        # Note: theme_choice is excluded here because it already has a dedicated
+        # handler (_on_theme_change) for live preview, which also updates Apply state.
+        for ctrl in (self.language_choice,
+                     self.device_choice, self.buffer_choice, self.rate_choice,
+                     self.format_choice, self.bitrate_choice, self.depth_choice,
+                     self.stream_codec_choice, self.stream_bitrate_choice):
+            ctrl.Bind(wx.EVT_CHOICE, self._on_control_changed)
+
+        for ctrl in (self.deck_count_spin, self.interval_spin,
+                     self.threshold_spin, self.hysteresis_spin, self.hold_time_spin,
+                     self.preroll_spin, self.wait_spin, self.stream_port_spin):
+            ctrl.Bind(wx.EVT_SPINCTRL, self._on_control_changed)
+
+        self.crossfade_ctrl.Bind(wx.EVT_SPINCTRLDOUBLE, self._on_control_changed)
+        self.remember_last_project_check.Bind(wx.EVT_CHECKBOX, self._on_control_changed)
+        self.crossfade_check.Bind(wx.EVT_CHECKBOX, self._on_control_changed)
+        self.level_switch_check.Bind(wx.EVT_CHECKBOX, self._on_control_changed)
+        self.connect_at_startup_check.Bind(wx.EVT_CHECKBOX, self._on_control_changed)
+        self.stream_public_check.Bind(wx.EVT_CHECKBOX, self._on_control_changed)
+        self.auto_reconnect_check.Bind(wx.EVT_CHECKBOX, self._on_control_changed)
+        self.output_dir_text.Bind(wx.EVT_TEXT, self._on_control_changed)
+        self.stream_server_text.Bind(wx.EVT_TEXT, self._on_control_changed)
+        self.stream_mount_text.Bind(wx.EVT_TEXT, self._on_control_changed)
+        self.stream_credentials_text.Bind(wx.EVT_TEXT, self._on_control_changed)
+        self.stream_name_text.Bind(wx.EVT_TEXT, self._on_control_changed)
+        self.stream_description_text.Bind(wx.EVT_TEXT, self._on_control_changed)
+        self.stream_genre_text.Bind(wx.EVT_TEXT, self._on_control_changed)
+        self.stream_url_text.Bind(wx.EVT_TEXT, self._on_control_changed)
+
+        self.tts_enabled_check.Bind(wx.EVT_CHECKBOX, self._on_control_changed)
+        self.tts_engine_choice.Bind(wx.EVT_CHOICE, self._on_tts_engine_changed)
+        self.tts_voice_choice.Bind(wx.EVT_CHOICE, self._on_control_changed)
+        self.tts_rate_spin.Bind(wx.EVT_SPINCTRL, self._on_control_changed)
+        self.tts_volume_spin.Bind(wx.EVT_SPINCTRL, self._on_control_changed)
+
+    def _create_general_tab(self, parent):
+        """Create general options tab"""
+        panel = wx.Panel(parent)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # Language
+        lang_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        lang_label = wx.StaticText(panel, label=_("Language") + ":")
+        lang_sizer.Add(lang_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        current_lang = self.config_manager.get('General', 'language', 'system')
+        self.language_values = [SYSTEM_LANGUAGE] + get_i18n().get_available_languages()
+        lang_choices = [_("System language")] + [
+            LANGUAGE_NAMES.get(lang, lang) for lang in self.language_values[1:]
+        ]
+
+        self.language_choice = wx.Choice(panel, choices=lang_choices)
+        self.language_choice.SetName(_("Language"))
+        if current_lang in self.language_values:
+            self.language_choice.SetSelection(self.language_values.index(current_lang))
+        else:
+            self.language_choice.SetSelection(0)
+        lang_sizer.Add(self.language_choice, 1, wx.EXPAND | wx.ALL, 5)
+
+        sizer.Add(lang_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Number of decks
+        deck_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        deck_label = wx.StaticText(panel, label=_("Initial number of decks") + ":")
+        deck_sizer.Add(deck_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        current_deck_count = self.config_manager.getint('General', 'deck_count', 10)
+
+        self.deck_count_spin = wx.SpinCtrl(panel, value=str(current_deck_count),
+                                         min=min(VALID_DECK_RANGE), max=max(VALID_DECK_RANGE), initial=current_deck_count)
+        self.deck_count_spin.SetName(_("Initial number of decks"))
+        deck_sizer.Add(self.deck_count_spin, 1, wx.EXPAND | wx.ALL, 5)
+
+        sizer.Add(deck_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Theme
+        theme_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        theme_label = wx.StaticText(panel, label=_("Theme") + ":")
+        theme_sizer.Add(theme_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        current_theme = self.config_manager.get('General', 'theme', 'system')
+        theme_choices = [_("System"), _("Light"), _("Dark")]
+        theme_values = ['system', 'light', 'dark']
+
+        self.theme_choice = wx.Choice(panel, choices=theme_choices)
+        self.theme_choice.SetName(_("Theme"))
+        if current_theme in theme_values:
+            self.theme_choice.SetSelection(theme_values.index(current_theme))
+        self.theme_values = theme_values
+        self.theme_choice.Bind(wx.EVT_CHOICE, self._on_theme_change)
+        theme_sizer.Add(self.theme_choice, 1, wx.EXPAND | wx.ALL, 5)
+
+        sizer.Add(theme_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Restore last project
+        self.remember_last_project_check = wx.CheckBox(
+            panel,
+            label=_("&Reopen the last project on startup"),
+        )
+        self.remember_last_project_check.SetValue(
+            self.config_manager.getboolean('General', 'remember_last_project', False)
+        )
+        sizer.Add(self.remember_last_project_check, 0, wx.EXPAND | wx.ALL, 10)
+
+        panel.SetSizer(sizer)
+        return panel
+
+    def _create_audio_tab(self, parent):
+        """Create audio options tab"""
+        panel = wx.Panel(parent)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # Output device
+        device_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        device_label = wx.StaticText(panel, label=_("Output Device") + ":")
+        device_sizer.Add(device_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        # Get available output devices
+        self.output_devices = self._get_output_devices()
+        device_choices = [_("System Default"), _("No Output (Livestream Only)")]
+        self.device_values = ['default', 'null']
+
+        for device in self.output_devices:
+            device_choices.append(device['name'])
+            self.device_values.append(str(device['index']))
+
+        current_device = self.config_manager.get('Audio', 'output_device', 'default')
+
+        self.device_choice = wx.Choice(panel, choices=device_choices)
+        self.device_choice.SetName(_("Output Device"))
+        # Find and set current selection
+        if current_device in self.device_values:
+            self.device_choice.SetSelection(self.device_values.index(current_device))
+        else:
+            self.device_choice.SetSelection(0)  # Default to system default
+        device_sizer.Add(self.device_choice, 1, wx.EXPAND | wx.ALL, 5)
+
+        sizer.Add(device_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Buffer size
+        buffer_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        buffer_label = wx.StaticText(panel, label=_("Buffer size") + ":")
+        buffer_sizer.Add(buffer_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        current_buffer = self.config_manager.getint('Audio', 'buffer_size', 2048)
+        buffer_choices = ['512', '1024', '2048', '4096']
+
+        self.buffer_choice = wx.Choice(panel, choices=buffer_choices)
+        self.buffer_choice.SetName(_("Buffer size"))
+        if str(current_buffer) in buffer_choices:
+            self.buffer_choice.SetSelection(buffer_choices.index(str(current_buffer)))
+        buffer_sizer.Add(self.buffer_choice, 1, wx.EXPAND | wx.ALL, 5)
+
+        sizer.Add(buffer_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Sample rate
+        rate_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        rate_label = wx.StaticText(panel, label=_("Sample rate") + ":")
+        rate_sizer.Add(rate_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        current_rate = self.config_manager.getint('Audio', 'sample_rate', 44100)
+        rate_choices = ['44100', '48000']
+
+        self.rate_choice = wx.Choice(panel, choices=rate_choices)
+        self.rate_choice.SetName(_("Sample rate"))
+        if str(current_rate) in rate_choices:
+            self.rate_choice.SetSelection(rate_choices.index(str(current_rate)))
+        rate_sizer.Add(self.rate_choice, 1, wx.EXPAND | wx.ALL, 5)
+
+        sizer.Add(rate_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        panel.SetSizer(sizer)
+        return panel
+
+    def _get_output_devices(self):
+        """Get list of available audio output devices"""
+        try:
+            devices = sd.query_devices()
+            hostapis = sd.query_hostapis()
+            output_devices = []
+
+            for idx, device in enumerate(devices):
+                if device['max_output_channels'] > 0:
+                    # Get host API name for this device
+                    hostapi_idx = device['hostapi']
+                    hostapi_name = hostapis[hostapi_idx]['name'] if hostapi_idx < len(hostapis) else ''
+
+                    # Format display name with host API
+                    display_name = f"{device['name']} ({hostapi_name})" if hostapi_name else device['name']
+
+                    output_devices.append({
+                        'index': idx,
+                        'name': display_name,
+                    })
+
+            return output_devices
+        except Exception as e:
+            logger.error(f"Error querying audio devices: {e}")
+            return []
+
+    def _create_automation_tab(self, parent):
+        """Create automation options tab"""
+        panel = wx.Panel(parent)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        crossfade_box = wx.StaticBox(panel, label=_("Crossfade"))
+        crossfade_sizer = wx.StaticBoxSizer(crossfade_box, wx.VERTICAL)
+
+        # Switch interval
+        interval_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        interval_label = wx.StaticText(
+            crossfade_box, label=_("Switch Interval (seconds)") + ":"
+        )
+        interval_sizer.Add(interval_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        current_interval = self.config_manager.getint('Automation', 'switch_interval', 10)
+        self.interval_spin = wx.SpinCtrl(crossfade_box, value=str(current_interval),
+                                         min=1, max=300, initial=current_interval)
+        self.interval_spin.SetName(_("Switch Interval (seconds)"))
+        interval_sizer.Add(self.interval_spin, 1, wx.EXPAND | wx.ALL, 5)
+
+        crossfade_sizer.Add(interval_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Crossfade enabled
+        self.crossfade_check = wx.CheckBox(crossfade_box, label=_("Enable Crossfade"))
+        self.crossfade_check.SetName(_("Enable Crossfade"))
+        crossfade_enabled = self.config_manager.getboolean('Automation', 'crossfade_enabled', True)
+        self.crossfade_check.SetValue(crossfade_enabled)
+        crossfade_sizer.Add(self.crossfade_check, 0, wx.ALL, 10)
+
+        # Crossfade duration (in seconds)
+        label_text = _("Crossfade Duration (seconds)")
+        current_duration = self.config_manager.getfloat('Automation', 'crossfade_duration', 2.0)
+
+        # Create the custom control (it's a sizer)
+        self.crossfade_ctrl = AccessibleSpinCtrl(
+            crossfade_box,
+            label_text=label_text + ":", 
+            initial_val=current_duration, 
+            min_val=0.5, 
+            max_val=10.0, 
+            inc=0.1
+        )
+
+        crossfade_sizer.Add(self.crossfade_ctrl, 0, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(crossfade_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        level_box = wx.StaticBox(panel, label=_("Level-Based Switching"))
+        level_sizer = wx.StaticBoxSizer(level_box, wx.VERTICAL)
+
+        # Enable level-based switching
+        self.level_switch_check = wx.CheckBox(level_box, label=_("Enable level-based switching"))
+        self.level_switch_check.SetName(_("Enable level-based switching"))
+        level_switch_enabled = self.config_manager.getboolean('Automation', 'level_switch_enabled', False)
+        self.level_switch_check.SetValue(level_switch_enabled)
+        level_sizer.Add(self.level_switch_check, 0, wx.ALL, 10)
+
+        # Threshold
+        threshold_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        threshold_label = wx.StaticText(level_box, label=_("Threshold (dB)") + ":")
+        threshold_sizer.Add(threshold_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        current_threshold = self.config_manager.getint('Automation', 'level_threshold_db', -30)
+        self.threshold_spin = wx.SpinCtrl(level_box, value=str(current_threshold),
+                                          min=-60, max=0, initial=current_threshold)
+        self.threshold_spin.SetName(_("Threshold (dB)"))
+        threshold_sizer.Add(self.threshold_spin, 1, wx.EXPAND | wx.ALL, 5)
+
+        level_sizer.Add(threshold_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Hysteresis
+        hysteresis_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        hysteresis_label = wx.StaticText(level_box, label=_("Hysteresis (dB)") + ":")
+        hysteresis_sizer.Add(hysteresis_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        current_hysteresis = self.config_manager.getint('Automation', 'level_hysteresis_db', 3)
+        self.hysteresis_spin = wx.SpinCtrl(level_box, value=str(current_hysteresis),
+                                           min=0, max=20, initial=current_hysteresis)
+        self.hysteresis_spin.SetName(_("Hysteresis (dB)"))
+        hysteresis_sizer.Add(self.hysteresis_spin, 1, wx.EXPAND | wx.ALL, 5)
+
+        level_sizer.Add(hysteresis_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Hold time
+        hold_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        hold_label = wx.StaticText(level_box, label=_("Hold Time (seconds)") + ":")
+        hold_sizer.Add(hold_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        current_hold = self.config_manager.getint('Automation', 'level_hold_time', 3)
+        self.hold_time_spin = wx.SpinCtrl(level_box, value=str(current_hold),
+                                          min=1, max=30, initial=current_hold)
+        self.hold_time_spin.SetName(_("Hold Time (seconds)"))
+        hold_sizer.Add(self.hold_time_spin, 1, wx.EXPAND | wx.ALL, 5)
+
+        level_sizer.Add(hold_sizer, 0, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(level_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        panel.SetSizer(sizer)
+        return panel
+
+    def _create_recorder_tab(self, parent):
+        """Create recorder options tab"""
+        panel = wx.Panel(parent)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # Recording format
+        format_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        format_label = wx.StaticText(panel, label=_("Format") + ":")
+        format_sizer.Add(format_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        current_format = self.config_manager.get('Recorder', 'format', 'wav')
+
+        # Build format choices based on FFmpeg availability
+        available_formats = [
+            (format_key, format_info)
+            for format_key, format_info in RECORDING_FORMATS.items()
+            if FFMPEG_AVAILABLE or format_info.get('native', False)
+        ]
+        format_choices = [format_info['name'] for _, format_info in available_formats]
+        format_values = [format_key for format_key, _ in available_formats]
+
+        self.format_choice = wx.Choice(panel, choices=format_choices)
+        self.format_choice.SetName(_("Format"))
+        if current_format in format_values:
+            self.format_choice.SetSelection(format_values.index(current_format))
+        else:
+            self.format_choice.SetSelection(0)  # Default to WAV
+        self.format_values = format_values
+        format_sizer.Add(self.format_choice, 1, wx.EXPAND | wx.ALL, 5)
+
+        sizer.Add(format_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Bitrate (for compressed formats)
+        bitrate_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        bitrate_label = wx.StaticText(panel, label=_("Bitrate (compressed formats)") + ":")
+        bitrate_sizer.Add(bitrate_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        current_bitrate = self.config_manager.getint('Recorder', 'bitrate', 192)
+        bitrate_choices = ['64', '96', '128', '160', '192', '224', '256', '320']
+        bitrate_labels = [f'{b} kbps' for b in bitrate_choices]
+
+        self.bitrate_choice = wx.Choice(panel, choices=bitrate_labels)
+        self.bitrate_choice.SetName(_("Bitrate (compressed formats)"))
+        if str(current_bitrate) in bitrate_choices:
+            self.bitrate_choice.SetSelection(bitrate_choices.index(str(current_bitrate)))
+        else:
+            self.bitrate_choice.SetSelection(4)  # Default to 192
+        self.bitrate_values = bitrate_choices
+        bitrate_sizer.Add(self.bitrate_choice, 1, wx.EXPAND | wx.ALL, 5)
+
+        sizer.Add(bitrate_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # FFmpeg status info
+        if not FFMPEG_AVAILABLE:
+            ffmpeg_format_names = [
+                format_info['name']
+                for format_info in RECORDING_FORMATS.values()
+                if not format_info.get('native', False)
+            ]
+            ffmpeg_info = wx.StaticText(
+                panel,
+                label=_("Note: Install FFmpeg for {formats} support.").format(
+                    formats=", ".join(ffmpeg_format_names)
+                )
+            )
+            ffmpeg_info.SetForegroundColour(wx.Colour(128, 128, 128))
+            sizer.Add(ffmpeg_info, 0, wx.ALL, 10)
+
+        # Bit depth (only for WAV format)
+        depth_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        depth_label = wx.StaticText(panel, label=_("Bit Depth (WAV only)") + ":")
+        depth_sizer.Add(depth_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        current_depth = self.config_manager.getint('Recorder', 'bit_depth', 16)
+        depth_choices = ['16', '24', '32']
+
+        self.depth_choice = wx.Choice(panel, choices=depth_choices)
+        self.depth_choice.SetName(_("Bit Depth (WAV only)"))
+        if str(current_depth) in depth_choices:
+            self.depth_choice.SetSelection(depth_choices.index(str(current_depth)))
+        depth_sizer.Add(self.depth_choice, 1, wx.EXPAND | wx.ALL, 5)
+
+        sizer.Add(depth_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Pre-roll duration
+        preroll_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        preroll_label = wx.StaticText(panel, label=_("Pre-Roll (seconds)") + ":")
+        preroll_sizer.Add(preroll_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        current_preroll = self.config_manager.getint('Recorder', 'pre_roll_seconds', 30)
+        self.preroll_spin = wx.SpinCtrl(panel, value=str(current_preroll),
+                                        min=0, max=120, initial=current_preroll)
+        self.preroll_spin.SetName(_("Pre-Roll (seconds)"))
+        self.preroll_spin.SetToolTip(_("Buffer audio before recording starts (0 to disable)"))
+        preroll_sizer.Add(self.preroll_spin, 1, wx.EXPAND | wx.ALL, 5)
+
+        sizer.Add(preroll_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Output directory
+        dir_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        dir_label = wx.StaticText(panel, label=_("Output Directory") + ":")
+        dir_sizer.Add(dir_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        current_dir = self.config_manager.get('Recorder', 'output_directory', '')
+        self.output_dir_text = wx.TextCtrl(panel, value=current_dir)
+        self.output_dir_text.SetName(_("Output Directory"))
+        dir_sizer.Add(self.output_dir_text, 1, wx.EXPAND | wx.ALL, 5)
+
+        browse_btn = wx.Button(panel, label=_("Browse") + " …")
+        browse_btn.SetName(_("Browse") + " …")
+        browse_btn.Bind(wx.EVT_BUTTON, self._on_browse_output_dir)
+        dir_sizer.Add(browse_btn, 0, wx.ALL, 5)
+
+        sizer.Add(dir_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        panel.SetSizer(sizer)
+        return panel
+
+    def _on_browse_output_dir(self, event):
+        """Handle browse button for output directory"""
+        dlg = wx.DirDialog(self, _("Choose recording output directory"))
+        if dlg.ShowModal() == wx.ID_OK:
+            self.output_dir_text.SetValue(dlg.GetPath())
+        dlg.Destroy()
+
+    def _create_streaming_tab(self, parent):
+        """Create streaming options tab"""
+        panel = wx.Panel(parent)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        server_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        server_label = wx.StaticText(panel, label=_("Server") + ":")
+        server_sizer.Add(server_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.stream_server_text = wx.TextCtrl(panel, value=self.config_manager.get('Streaming', 'server', ''))
+        self.stream_server_text.SetName(_("Server"))
+        server_sizer.Add(self.stream_server_text, 1, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(server_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        port_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        port_label = wx.StaticText(panel, label=_("Port") + ":")
+        port_sizer.Add(port_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        current_port = self.config_manager.getint('Streaming', 'port', 8000)
+        self.stream_port_spin = wx.SpinCtrl(panel, value=str(current_port), min=1, max=65535, initial=current_port)
+        self.stream_port_spin.SetName(_("Port"))
+        port_sizer.Add(self.stream_port_spin, 1, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(port_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        mount_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        mount_label = wx.StaticText(panel, label=_("Mountpoint") + ":")
+        mount_sizer.Add(mount_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.stream_mount_text = wx.TextCtrl(panel, value=self.config_manager.get('Streaming', 'mountpoint', '/stream'))
+        self.stream_mount_text.SetName(_("Mountpoint"))
+        mount_sizer.Add(self.stream_mount_text, 1, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(mount_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        credentials_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        credentials_label = wx.StaticText(panel, label=_("Username:Password") + ":")
+        credentials_sizer.Add(credentials_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.stream_credentials_text = wx.TextCtrl(
+            panel, value=self.config_manager.get('Streaming', 'credentials', ''),
+            style=wx.TE_PASSWORD
+        )
+        self.stream_credentials_text.SetName(_("Username:Password"))
+        credentials_sizer.Add(self.stream_credentials_text, 1, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(credentials_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        codec_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        codec_label = wx.StaticText(panel, label=_("Codec") + ":")
+        codec_sizer.Add(codec_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.stream_codec_values = ['mp3', 'ogg']
+        self.stream_codec_choice = wx.Choice(panel, choices=['MP3', 'OGG Vorbis'])
+        self.stream_codec_choice.SetName(_("Codec"))
+        current_codec = self.config_manager.get('Streaming', 'codec', 'mp3')
+        self.stream_codec_choice.SetSelection(
+            self.stream_codec_values.index(current_codec) if current_codec in self.stream_codec_values else 0
+        )
+        codec_sizer.Add(self.stream_codec_choice, 1, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(codec_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        bitrate_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        bitrate_label = wx.StaticText(panel, label=_("Bitrate") + ":")
+        bitrate_sizer.Add(bitrate_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.stream_bitrate_values = ['96', '128', '160', '192', '256', '320']
+        self.stream_bitrate_choice = wx.Choice(panel, choices=[f"{value} kbps" for value in self.stream_bitrate_values])
+        self.stream_bitrate_choice.SetName(_("Bitrate"))
+        current_stream_bitrate = str(self.config_manager.getint('Streaming', 'bitrate', 192))
+        self.stream_bitrate_choice.SetSelection(
+            self.stream_bitrate_values.index(current_stream_bitrate)
+            if current_stream_bitrate in self.stream_bitrate_values else 3
+        )
+        bitrate_sizer.Add(self.stream_bitrate_choice, 1, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(bitrate_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        name_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        name_label = wx.StaticText(panel, label=_("Stream Name") + ":")
+        name_sizer.Add(name_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.stream_name_text = wx.TextCtrl(panel, value=self.config_manager.get('Streaming', 'name', 'MultiDeck Live'))
+        self.stream_name_text.SetName(_("Stream Name"))
+        name_sizer.Add(self.stream_name_text, 1, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(name_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        description_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        description_label = wx.StaticText(panel, label=_("Description") + ":")
+        description_sizer.Add(description_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.stream_description_text = wx.TextCtrl(panel, value=self.config_manager.get('Streaming', 'description', ''))
+        self.stream_description_text.SetName(_("Description"))
+        description_sizer.Add(self.stream_description_text, 1, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(description_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        genre_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        genre_label = wx.StaticText(panel, label=_("Genre") + ":")
+        genre_sizer.Add(genre_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.stream_genre_text = wx.TextCtrl(panel, value=self.config_manager.get('Streaming', 'genre', ''))
+        self.stream_genre_text.SetName(_("Genre"))
+        genre_sizer.Add(self.stream_genre_text, 1, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(genre_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        url_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        url_label = wx.StaticText(panel, label=_("Website URL") + ":")
+        url_sizer.Add(url_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.stream_url_text = wx.TextCtrl(panel, value=self.config_manager.get('Streaming', 'url', ''))
+        self.stream_url_text.SetName(_("Website URL"))
+        url_sizer.Add(self.stream_url_text, 1, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(url_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        self.stream_public_check = wx.CheckBox(panel, label=_("List stream as public"))
+        self.stream_public_check.SetName(_("List stream as public"))
+        self.stream_public_check.SetValue(self.config_manager.getboolean('Streaming', 'public', False))
+        sizer.Add(self.stream_public_check, 0, wx.ALL, 5)
+
+        self.connect_at_startup_check = wx.CheckBox(panel, label=_("Connect livestream at startup"))
+        self.connect_at_startup_check.SetName(_("Connect livestream at startup"))
+        self.connect_at_startup_check.SetValue(
+            self.config_manager.getboolean('Streaming', 'connect_at_startup', False)
+        )
+        sizer.Add(self.connect_at_startup_check, 0, wx.ALL, 5)
+
+        # Auto-reconnect
+        self.auto_reconnect_check = wx.CheckBox(panel, label=_("Auto-reconnect on connection loss"))
+        self.auto_reconnect_check.SetName(_("Auto-reconnect on connection loss"))
+        self.auto_reconnect_check.SetValue(
+            self.config_manager.getboolean('Streaming', 'auto_reconnect', True)
+        )
+        sizer.Add(self.auto_reconnect_check, 0, wx.ALL, 5)
+
+        # Reconnect wait
+        wait_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        wait_label = wx.StaticText(panel, label=_("Reconnect Wait (seconds)") + ":")
+        wait_sizer.Add(wait_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        current_wait = self.config_manager.getint('Streaming', 'reconnect_wait', 5)
+        self.wait_spin = wx.SpinCtrl(panel, value=str(current_wait),
+                                     min=1, max=60, initial=current_wait)
+        self.wait_spin.SetName(_("Reconnect Wait (seconds)"))
+        wait_sizer.Add(self.wait_spin, 1, wx.EXPAND | wx.ALL, 5)
+
+        sizer.Add(wait_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        panel.SetSizer(sizer)
+        return panel
+
+    def _create_tts_tab(self, parent):
+        """Create text-to-speech options tab"""
+        panel = wx.Panel(parent)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        tts_mgr = self.main_frame.tts_manager
+
+        # Enable TTS
+        self.tts_enabled_check = wx.CheckBox(panel, label=_("Enable text-to-speech announcements"))
+        self.tts_enabled_check.SetName(_("Enable text-to-speech announcements"))
+        self.tts_enabled_check.SetValue(
+            self.config_manager.getboolean('TTS', 'tts_enabled', False)
+        )
+        sizer.Add(self.tts_enabled_check, 0, wx.ALL, 10)
+
+        # Engine
+        engine_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        engine_label = wx.StaticText(panel, label=_("Engine") + ":")
+        engine_sizer.Add(engine_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        engine_entries = tts_mgr.get_available_engines()
+        if not engine_entries:
+            engine_entries = [(_("(none available)"), '')]
+        self._tts_engine_values = [e[1] for e in engine_entries]
+        engine_labels = [e[0] for e in engine_entries]
+
+        self.tts_engine_choice = wx.Choice(panel, choices=engine_labels)
+        self.tts_engine_choice.SetName(_("Engine"))
+        current_engine = self.config_manager.get('TTS', 'tts_engine', '')
+        if current_engine in self._tts_engine_values:
+            self.tts_engine_choice.SetSelection(self._tts_engine_values.index(current_engine))
+        else:
+            self.tts_engine_choice.SetSelection(0)
+        engine_sizer.Add(self.tts_engine_choice, 1, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(engine_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Voice
+        voice_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        voice_label = wx.StaticText(panel, label=_("Voice") + ":")
+        voice_sizer.Add(voice_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        selected_engine = self._tts_engine_values[self.tts_engine_choice.GetSelection()]
+        voices = tts_mgr.get_available_voices(selected_engine)
+        self._tts_voice_names = [v[0] for v in voices]
+        if not self._tts_voice_names:
+            self._tts_voice_names = [_("(default)")]
+
+        self.tts_voice_choice = wx.Choice(panel, choices=self._tts_voice_names)
+        self.tts_voice_choice.SetName(_("Voice"))
+        current_voice = self.config_manager.get('TTS', 'tts_voice', '')
+        if current_voice in self._tts_voice_names:
+            self.tts_voice_choice.SetSelection(self._tts_voice_names.index(current_voice))
+        else:
+            self.tts_voice_choice.SetSelection(0)
+        voice_sizer.Add(self.tts_voice_choice, 1, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(voice_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Rate
+        rate_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        rate_label = wx.StaticText(panel, label=_("Rate (%, 0=default)") + ":")
+        rate_sizer.Add(rate_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        current_rate = self.config_manager.getint('TTS', 'tts_rate', 0)
+        current_rate = max(0, min(100, current_rate))
+        self.tts_rate_spin = wx.SpinCtrl(panel, value=str(current_rate),
+                                         min=0, max=100, initial=current_rate)
+        self.tts_rate_spin.SetName(_("Rate (%, 0=default)"))
+        rate_sizer.Add(self.tts_rate_spin, 1, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(rate_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Volume
+        vol_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        vol_label = wx.StaticText(panel, label=_("Volume (%, -1=default)") + ":")
+        vol_sizer.Add(vol_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        current_vol = self.config_manager.getint('TTS', 'tts_volume', -1)
+        self.tts_volume_spin = wx.SpinCtrl(panel, value=str(current_vol),
+                                           min=-1, max=100, initial=current_vol)
+        self.tts_volume_spin.SetName(_("Volume (%, -1=default)"))
+        vol_sizer.Add(self.tts_volume_spin, 1, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(vol_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Test button
+        test_btn = wx.Button(panel, label=_("Test voice"))
+        test_btn.SetName(_("Test voice"))
+        test_btn.Bind(wx.EVT_BUTTON, self._on_tts_test)
+        sizer.Add(test_btn, 0, wx.ALL, 10)
+
+        panel.SetSizer(sizer)
+        return panel
+
+    def _on_tts_engine_changed(self, event):
+        """Reload voice list when engine selection changes"""
+        engine_idx = self.tts_engine_choice.GetSelection()
+        if 0 <= engine_idx < len(self._tts_engine_values):
+            engine_name = self._tts_engine_values[engine_idx]
+        else:
+            engine_name = ''
+        voices = self.main_frame.tts_manager.get_available_voices(engine_name)
+        self._tts_voice_names = [v[0] for v in voices]
+        if not self._tts_voice_names:
+            self._tts_voice_names = [_("(default)")]
+        self.tts_voice_choice.Set(self._tts_voice_names)
+        self.tts_voice_choice.SetSelection(0)
+        self._on_control_changed(event)
+
+    def _on_tts_test(self, event):
+        """Speak a short test phrase using current settings"""
+        tts_mgr = self.main_frame.tts_manager
+        previous_state = self._get_tts_manager_state()
+        engine_idx = self.tts_engine_choice.GetSelection()
+        engine_name = self._tts_engine_values[engine_idx] if 0 <= engine_idx < len(self._tts_engine_values) else ''
+        voice_idx = self.tts_voice_choice.GetSelection()
+        voice_name = self._tts_voice_names[voice_idx] if 0 <= voice_idx < len(self._tts_voice_names) else ''
+        if voice_name == _("(default)"):
+            voice_name = ''
+        rate = self.tts_rate_spin.GetValue()
+        volume = self.tts_volume_spin.GetValue()
+
+        try:
+            tts_mgr.configure(engine_name, voice_name, rate, volume)
+            tts_mgr.tts_enabled = True
+            tts_mgr.speak(_("Test announcement: Deck 1"))
+        finally:
+            self._restore_tts_manager_state(previous_state)
+
+    def _on_theme_change(self, event):
+        """Handle theme selection change as a temporary live preview"""
+        if self.theme_manager:
+            selected_theme = self.theme_values[self.theme_choice.GetSelection()]
+            self.theme_manager.set_theme(selected_theme, save=False)
+            # Re-apply theme to this dialog
+            self.theme_manager.apply_theme(self)
+        if self._has_tab_changes('general'):
+            self._applied_sections.discard('general')
+        self._update_apply_state()
+
+    def _get_tts_manager_state(self):
+        """Return the current runtime TTS manager settings."""
+        tts_mgr = self.main_frame.tts_manager
+        with tts_mgr._lock:
+            return (
+                tts_mgr.tts_enabled,
+                tts_mgr._engine_name,
+                tts_mgr._voice_name,
+                tts_mgr._rate,
+                tts_mgr._volume,
+            )
+
+    def _restore_tts_manager_state(self, state):
+        """Restore runtime TTS settings without touching persisted config."""
+        enabled, engine_name, voice_name, rate, volume = state
+        tts_mgr = self.main_frame.tts_manager
+        tts_mgr.configure(engine_name, voice_name, rate, volume)
+        tts_mgr.tts_enabled = enabled
+
+    def _restore_unsaved_live_settings(self):
+        """Revert temporary live previews for sections that were not applied."""
+        if 'general' not in self._applied_sections and self.theme_manager:
+            self.theme_manager.set_theme(self._initial_theme, save=False)
+        if 'tts' not in self._applied_sections:
+            self._restore_tts_manager_state(self._initial_tts_state)
+
+    def _on_cancel(self, event):
+        """Handle Cancel/Escape - discard unsaved live preview settings."""
+        self._restore_unsaved_live_settings()
+        self.EndModal(wx.ID_CANCEL)
+
+    def _on_close(self, event):
+        """Handle window close - discard unsaved live preview settings."""
+        self._restore_unsaved_live_settings()
+        if self.IsModal():
+            self.EndModal(wx.ID_CANCEL)
+        else:
+            self.Destroy()
+
+    # --- Change detection ---
+
+    def _snapshot_initial_values(self):
+        """Capture current control values as baseline for change detection"""
+        self._initial_values = {
+            'general': (
+                self.language_choice.GetSelection(),
+                self.deck_count_spin.GetValue(),
+                self.theme_choice.GetSelection(),
+                self.remember_last_project_check.GetValue(),
+            ),
+            'audio': (
+                self.device_choice.GetSelection(),
+                self.buffer_choice.GetSelection(),
+                self.rate_choice.GetSelection(),
+            ),
+            'automation': (
+                self.interval_spin.GetValue(),
+                self.crossfade_check.GetValue(),
+                self.crossfade_ctrl.GetValue(),
+                self.level_switch_check.GetValue(),
+                self.threshold_spin.GetValue(),
+                self.hysteresis_spin.GetValue(),
+                self.hold_time_spin.GetValue(),
+            ),
+            'recorder': (
+                self.format_choice.GetSelection(),
+                self.bitrate_choice.GetSelection(),
+                self.depth_choice.GetSelection(),
+                self.preroll_spin.GetValue(),
+                self.output_dir_text.GetValue(),
+            ),
+            'streaming': (
+                self.stream_server_text.GetValue(),
+                self.stream_port_spin.GetValue(),
+                self.stream_mount_text.GetValue(),
+                self.stream_credentials_text.GetValue(),
+                self.stream_codec_choice.GetSelection(),
+                self.stream_bitrate_choice.GetSelection(),
+                self.stream_name_text.GetValue(),
+                self.stream_description_text.GetValue(),
+                self.stream_genre_text.GetValue(),
+                self.stream_url_text.GetValue(),
+                self.stream_public_check.GetValue(),
+                self.connect_at_startup_check.GetValue(),
+                self.auto_reconnect_check.GetValue(),
+                self.wait_spin.GetValue(),
+            ),
+            'tts': (
+                self.tts_enabled_check.GetValue(),
+                self.tts_engine_choice.GetSelection(),
+                self.tts_voice_choice.GetSelection(),
+                self.tts_rate_spin.GetValue(),
+                self.tts_volume_spin.GetValue(),
+            ),
+        }
+
+    def _get_current_values(self, tab_name):
+        """Get current control values for a given tab"""
+        if tab_name == 'general':
+            return (
+                self.language_choice.GetSelection(),
+                self.deck_count_spin.GetValue(),
+                self.theme_choice.GetSelection(),
+                self.remember_last_project_check.GetValue(),
+            )
+        elif tab_name == 'audio':
+            return (
+                self.device_choice.GetSelection(),
+                self.buffer_choice.GetSelection(),
+                self.rate_choice.GetSelection(),
+            )
+        elif tab_name == 'automation':
+            return (
+                self.interval_spin.GetValue(),
+                self.crossfade_check.GetValue(),
+                self.crossfade_ctrl.GetValue(),
+                self.level_switch_check.GetValue(),
+                self.threshold_spin.GetValue(),
+                self.hysteresis_spin.GetValue(),
+                self.hold_time_spin.GetValue(),
+            )
+        elif tab_name == 'recorder':
+            return (
+                self.format_choice.GetSelection(),
+                self.bitrate_choice.GetSelection(),
+                self.depth_choice.GetSelection(),
+                self.preroll_spin.GetValue(),
+                self.output_dir_text.GetValue(),
+            )
+        elif tab_name == 'streaming':
+            return (
+                self.stream_server_text.GetValue(),
+                self.stream_port_spin.GetValue(),
+                self.stream_mount_text.GetValue(),
+                self.stream_credentials_text.GetValue(),
+                self.stream_codec_choice.GetSelection(),
+                self.stream_bitrate_choice.GetSelection(),
+                self.stream_name_text.GetValue(),
+                self.stream_description_text.GetValue(),
+                self.stream_genre_text.GetValue(),
+                self.stream_url_text.GetValue(),
+                self.stream_public_check.GetValue(),
+                self.connect_at_startup_check.GetValue(),
+                self.auto_reconnect_check.GetValue(),
+                self.wait_spin.GetValue(),
+            )
+        elif tab_name == 'tts':
+            return (
+                self.tts_enabled_check.GetValue(),
+                self.tts_engine_choice.GetSelection(),
+                self.tts_voice_choice.GetSelection(),
+                self.tts_rate_spin.GetValue(),
+                self.tts_volume_spin.GetValue(),
+            )
+        return ()
+
+    def _get_active_tab_name(self):
+        """Get the name of the currently active tab"""
+        idx = self.book.GetSelection()
+        if 0 <= idx < len(self.TAB_NAMES):
+            return self.TAB_NAMES[idx]
+        return ''
+
+    def _has_tab_changes(self, tab_name):
+        """Check if the given tab has unsaved changes compared to initial values"""
+        return self._get_current_values(tab_name) != self._initial_values.get(tab_name)
+
+    def _update_apply_state(self):
+        """Enable or disable the Apply button based on current tab changes"""
+        tab_name = self._get_active_tab_name()
+        self.apply_button.Enable(self._has_tab_changes(tab_name))
+
+    def _on_page_changed(self, event):
+        """Update Apply button after a category selection change."""
+        event.Skip()
+        self._update_apply_state()
+
+    def _fit_to_pages(self):
+        """Fit the dialog to its initial content with minimum size constraints."""
+        self.Fit()
+        size = self.GetSize()
+        if size.width < 700 or size.height < 600:
+            self.SetSize(max(size.width, 700), max(size.height, 600))
+
+    def _on_control_changed(self, event):
+        """Handle any control value change - update Apply button state"""
+        event.Skip()
+        tab_name = self._get_active_tab_name()
+        if tab_name and self._has_tab_changes(tab_name):
+            self._applied_sections.discard(tab_name)
+        self._update_apply_state()
+
+    # --- Per-section save methods ---
+
+    def _save_general(self):
+        """Save general settings to config and return restart reasons"""
+        old_language = self.config_manager.get('General', 'language', 'system')
+        old_deck_count = self.config_manager.get('General', 'deck_count', '10')
+
+        self.config_manager.set(
+            'General',
+            'language',
+            self.language_values[self.language_choice.GetSelection()]
+        )
+        self.config_manager.set('General', 'deck_count', self.deck_count_spin.GetValue())
+        self.config_manager.set('General', 'theme',
+                               self.theme_values[self.theme_choice.GetSelection()])
+        remember_last_project = self.remember_last_project_check.GetValue()
+        self.config_manager.set('General', 'remember_last_project', remember_last_project)
+        if remember_last_project and self.main_frame.current_project_file:
+            self.config_manager.set(
+                'General', 'last_project_file', self.main_frame.current_project_file
+            )
+        elif not remember_last_project:
+            self.config_manager.set('General', 'last_project_file', '')
+
+        restart_reasons = []
+        if self.config_manager.get('General', 'language', 'system') != old_language:
+            restart_reasons.append(_("Language"))
+        if self.config_manager.get('General', 'deck_count', '10') != old_deck_count:
+            restart_reasons.append(_("Initial number of decks"))
+        return restart_reasons
+
+    def _save_audio(self):
+        """Save audio settings to config and return restart reasons"""
+        old_buffer_size = self.config_manager.get('Audio', 'buffer_size', '2048')
+        old_sample_rate = self.config_manager.get('Audio', 'sample_rate', '44100')
+
+        self.config_manager.set('Audio', 'output_device',
+                               self.device_values[self.device_choice.GetSelection()])
+
+        buffer_choices = ['512', '1024', '2048', '4096']
+        self.config_manager.set('Audio', 'buffer_size',
+                               buffer_choices[self.buffer_choice.GetSelection()])
+
+        rate_choices = ['44100', '48000']
+        self.config_manager.set('Audio', 'sample_rate',
+                               rate_choices[self.rate_choice.GetSelection()])
+
+        restart_reasons = []
+        if self.config_manager.get('Audio', 'buffer_size', '2048') != old_buffer_size:
+            restart_reasons.append(_("Buffer size"))
+        if self.config_manager.get('Audio', 'sample_rate', '44100') != old_sample_rate:
+            restart_reasons.append(_("Sample rate"))
+        return restart_reasons
+
+    def _save_automation(self):
+        """Save automation settings to config"""
+        self.config_manager.set('Automation', 'switch_interval', self.interval_spin.GetValue())
+        self.config_manager.set('Automation', 'crossfade_enabled', self.crossfade_check.GetValue())
+        self.config_manager.set('Automation', 'crossfade_duration', self.crossfade_ctrl.GetValue())
+        self.config_manager.set('Automation', 'level_switch_enabled', self.level_switch_check.GetValue())
+        self.config_manager.set('Automation', 'level_threshold_db', self.threshold_spin.GetValue())
+        self.config_manager.set('Automation', 'level_hysteresis_db', self.hysteresis_spin.GetValue())
+        self.config_manager.set('Automation', 'level_hold_time', self.hold_time_spin.GetValue())
+
+    def _save_recorder(self):
+        """Save recorder settings to config"""
+        self.config_manager.set('Recorder', 'format',
+                               self.format_values[self.format_choice.GetSelection()])
+        self.config_manager.set('Recorder', 'bitrate',
+                               self.bitrate_values[self.bitrate_choice.GetSelection()])
+
+        depth_choices = ['16', '24', '32']
+        self.config_manager.set('Recorder', 'bit_depth',
+                               depth_choices[self.depth_choice.GetSelection()])
+
+        self.config_manager.set('Recorder', 'pre_roll_seconds',
+                               self.preroll_spin.GetValue())
+        self.config_manager.set('Recorder', 'output_directory',
+                               self.output_dir_text.GetValue())
+
+    def _save_streaming(self):
+        """Save streaming settings to config"""
+        self.config_manager.set('Streaming', 'server', self.stream_server_text.GetValue().strip())
+        self.config_manager.set('Streaming', 'port', self.stream_port_spin.GetValue())
+        mountpoint = self.stream_mount_text.GetValue().strip() or '/stream'
+        if not mountpoint.startswith('/'):
+            mountpoint = f'/{mountpoint}'
+        self.config_manager.set('Streaming', 'mountpoint', mountpoint)
+        self.config_manager.set('Streaming', 'credentials', self.stream_credentials_text.GetValue().strip())
+        self.config_manager.set('Streaming', 'codec',
+                               self.stream_codec_values[self.stream_codec_choice.GetSelection()])
+        self.config_manager.set('Streaming', 'bitrate',
+                               self.stream_bitrate_values[self.stream_bitrate_choice.GetSelection()])
+        self.config_manager.set('Streaming', 'name', self.stream_name_text.GetValue().strip())
+        self.config_manager.set('Streaming', 'description', self.stream_description_text.GetValue().strip())
+        self.config_manager.set('Streaming', 'genre', self.stream_genre_text.GetValue().strip())
+        self.config_manager.set('Streaming', 'url', self.stream_url_text.GetValue().strip())
+        self.config_manager.set('Streaming', 'public', self.stream_public_check.GetValue())
+        self.config_manager.set('Streaming', 'connect_at_startup', self.connect_at_startup_check.GetValue())
+        self.config_manager.set('Streaming', 'auto_reconnect',
+                               self.auto_reconnect_check.GetValue())
+        self.config_manager.set('Streaming', 'reconnect_wait', self.wait_spin.GetValue())
+
+    def _save_tts(self):
+        """Save TTS settings to config"""
+        self.config_manager.set('TTS', 'tts_enabled', self.tts_enabled_check.GetValue())
+        engine_idx = self.tts_engine_choice.GetSelection()
+        engine_name = self._tts_engine_values[engine_idx] if 0 <= engine_idx < len(self._tts_engine_values) else ''
+        self.config_manager.set('TTS', 'tts_engine', engine_name)
+        voice_idx = self.tts_voice_choice.GetSelection()
+        voice_name = self._tts_voice_names[voice_idx] if 0 <= voice_idx < len(self._tts_voice_names) else ''
+        if voice_name == _("(default)"):
+            voice_name = ''
+        self.config_manager.set('TTS', 'tts_voice', voice_name)
+        self.config_manager.set('TTS', 'tts_rate', self.tts_rate_spin.GetValue())
+        self.config_manager.set('TTS', 'tts_volume', self.tts_volume_spin.GetValue())
+
+    def _show_restart_message(self, restart_reasons):
+        """Show restart message if any settings require it"""
+        if restart_reasons:
+            reason_list = ", ".join(restart_reasons)
+            wx.MessageBox(
+                _("The following settings require restarting the application to take effect:") + "\n\n" + reason_list,
+                _("Restart Required"),
+                wx.OK | wx.ICON_INFORMATION
+            )
+
+    # --- Apply button handler ---
+
+    def _apply_section(self, tab_name):
+        """Save, apply, and mark a single section as applied. Returns restart reasons."""
+        restart_reasons = []
+        if tab_name == 'general':
+            restart_reasons = self._save_general()
+        elif tab_name == 'audio':
+            old_device = self._initial_device
+            restart_reasons = self._save_audio()
+            self.config_manager.save()
+            self.main_frame.apply_audio_settings(old_device)
+            self._initial_device = self.config_manager.get('Audio', 'output_device', 'default')
+        elif tab_name == 'automation':
+            self._save_automation()
+            self.config_manager.save()
+        elif tab_name == 'recorder':
+            self._save_recorder()
+            self.config_manager.save()
+            self.main_frame.apply_recorder_settings()
+        elif tab_name == 'streaming':
+            self._save_streaming()
+            self.config_manager.save()
+            self.main_frame.apply_streaming_settings()
+        elif tab_name == 'tts':
+            self._save_tts()
+            self.config_manager.save()
+            self.main_frame.apply_tts_settings()
+
+        self.config_manager.save()
+        self._applied_sections.add(tab_name)
+        # Update baseline so Apply disables after applying
+        self._initial_values[tab_name] = self._get_current_values(tab_name)
+        if tab_name == 'general':
+            self._initial_theme = self.config_manager.get('General', 'theme', 'system')
+        elif tab_name == 'tts':
+            self._initial_tts_state = self._get_tts_manager_state()
+        self._update_apply_state()
+        return restart_reasons
+
+    def _on_apply(self, event):
+        """Apply only the currently active tab's settings"""
+        tab_name = self._get_active_tab_name()
+        if not tab_name:
+            return
+        restart_reasons = self._apply_section(tab_name)
+        self._show_restart_message(restart_reasons)
+
+    # --- OK button handler ---
+
+    def _on_ok(self, event):
+        """Handle OK button - save and apply all sections not yet applied"""
+        restart_reasons = []
+
+        if 'general' not in self._applied_sections:
+            restart_reasons.extend(self._save_general())
+        if 'audio' not in self._applied_sections:
+            restart_reasons.extend(self._save_audio())
+        if 'automation' not in self._applied_sections:
+            self._save_automation()
+        if 'recorder' not in self._applied_sections:
+            self._save_recorder()
+        if 'streaming' not in self._applied_sections:
+            self._save_streaming()
+        if 'tts' not in self._applied_sections:
+            self._save_tts()
+
+        self.config_manager.save()
+        self._show_restart_message(restart_reasons)
+        self.EndModal(wx.ID_OK)

@@ -1,0 +1,1737 @@
+# German translations for MultiDeck Audio Player.
+# Copyright (C) 2026 Steffen Schultz
+# This file is distributed under the same license as the MultiDeck package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: MultiDeck Audio Player 0.1.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-10-11 12:40+0200\n"
+"PO-Revision-Date: 2026-10-11 12:44+0200\n"
+"Last-Translator: Steffen Schultz\n"
+"Language-Team: German\n"
+"Language: de\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"Generated-By: Manual\n"
+"X-Generator: Poedit 3.9\n"
+
+#: gui/dialogs/effects.py:22
+msgid "Audio Effects"
+msgstr "Audioeffekte"
+
+#: gui/dialogs/effects.py:28 gui/main_frame.py:272 gui/main_frame.py:401
+#: gui/main_frame.py:1710 gui/main_frame.py:1870 gui/main_frame.py:2326
+msgid "Master"
+msgstr "Master"
+
+#: gui/dialogs/effects.py:30
+#, python-brace-format
+msgid "Audio Effects: {}"
+msgstr "Audioeffekte: {}"
+
+#: gui/dialogs/effects.py:105
+msgid "Built-in Effects"
+msgstr "Integrierte Effekte"
+
+#: gui/dialogs/effects.py:106 gui/dialogs/effects.py:211
+#: gui/dialogs/effects.py:215
+msgid "VST Plugins"
+msgstr "VST-Plugins"
+
+#: gui/dialogs/effects.py:110
+msgid "&Effect Chains"
+msgstr "&Effektketten"
+
+#: gui/dialogs/effects.py:113 gui/dialogs/effects.py:114
+msgid "Effect Chains"
+msgstr "Effektketten"
+
+#: gui/dialogs/effects.py:146
+msgid "&Close"
+msgstr "&Schließen"
+
+#: gui/dialogs/effects.py:160
+#, python-brace-format
+msgid "Enable effects for {}"
+msgstr "Effekte für {} einschalten"
+
+#: gui/dialogs/effects.py:219
+msgid "Enable selected plugin"
+msgstr "Gewähltes Plugin einschalten"
+
+#: gui/dialogs/effects.py:220
+msgid "Enable selected VST plugin"
+msgstr "Gewähltes VST-Plugin einschalten"
+
+#: gui/dialogs/effects.py:225
+msgid "&Add VST File"
+msgstr "VST-Datei &hinzufügen"
+
+#: gui/dialogs/effects.py:226
+msgid "Add VST &Bundle"
+msgstr "VST-&Bundle hinzufügen"
+
+#: gui/dialogs/effects.py:227
+msgid "&Remove"
+msgstr "Entfe&rnen"
+
+#: gui/dialogs/effects.py:228
+msgid "Move &Up"
+msgstr "Verschiebe h&och"
+
+#: gui/dialogs/effects.py:229
+msgid "Move &Down"
+msgstr "Verschiebe r&unter"
+
+#: gui/dialogs/effects.py:230
+msgid "Open &Editor"
+msgstr "&Editor öffnen"
+
+#: gui/dialogs/effects.py:247
+msgid "Parameters of selected plugin"
+msgstr "Parameter des gewählten Plugins"
+
+#: gui/dialogs/effects.py:329
+msgid ""
+"The pedalboard library does not support opening native plugin editors in "
+"this version.\n"
+"\n"
+"Use the parameter panel below to control the plugin."
+msgstr ""
+"Die pedalboard-Bibliothek unterstützt in dieser Version nicht das öffnen des "
+"nativen Plugin-Editors.\n"
+"\n"
+"Verwende das Parameter-Panel zum Kontrollieren des Plugins."
+
+#: gui/dialogs/effects.py:332
+msgid "Native Editor Not Available"
+msgstr "Nativer Editor nicht verfügbar"
+
+#: gui/dialogs/effects.py:336
+msgid "Editor Error"
+msgstr "Editorfehler"
+
+#: gui/dialogs/effects.py:393
+msgid "Load VST Plugin File"
+msgstr "VST-Plugin-Datei laden"
+
+#: gui/dialogs/effects.py:407
+msgid "Load VST Plugin Bundle"
+msgstr "VST-Plugin-Bundle laden"
+
+#: gui/dialogs/effects.py:424
+msgid "This VST3 bundle contains multiple plugins. Select the one to load."
+msgstr ""
+"Dieses VST3-Bundle enthält mehrere Plugins. Wähle das gewünschte Plugin aus."
+
+#: gui/dialogs/effects.py:425
+msgid "Select VST Plugin"
+msgstr "VST-Plugin wählen"
+
+#: gui/dialogs/effects.py:441
+#, python-brace-format
+msgid "Loading {} ..."
+msgstr "Lade {} ..."
+
+#: gui/dialogs/effects.py:462 gui/dialogs/effects.py:516
+#, python-brace-format
+msgid ""
+"Failed to load VST plugin:\n"
+"{}"
+msgstr ""
+"Fehler beim Laden des VST-Plugins:\n"
+"{}"
+
+#: gui/dialogs/effects.py:463 gui/dialogs/effects.py:517
+msgid "VST Load Error"
+msgstr "VST-Ladefehler"
+
+#: gui/dialogs/effects.py:479
+msgid "Load VST Plugin"
+msgstr "VST-Plugin laden"
+
+#: gui/dialogs/effects.py:497
+#, python-brace-format
+msgid "Loading {}…"
+msgstr "Lade {}…"
+
+#: gui/dialogs/effects.py:533
+#, python-brace-format
+msgid "Remove \"{}\"?"
+msgstr "Plugin \"{}\" entfernen?"
+
+#: gui/dialogs/effects.py:534
+msgid "Remove VST Plugin"
+msgstr "VST-Plugin entfernen"
+
+#: gui/dialogs/effects.py:560
+msgid "No parameters available."
+msgstr "Keine Parameter verfügbar."
+
+#: gui/dialogs/effects.py:661
+msgid "Reverb"
+msgstr "Hall"
+
+#: gui/dialogs/effects.py:665 gui/dialogs/effects.py:724
+#: gui/dialogs/effects.py:770 gui/dialogs/effects.py:816
+#: gui/dialogs/effects.py:862 gui/dialogs/effects.py:918
+#: gui/dialogs/effects.py:958
+msgid "Enable"
+msgstr "Einschalten"
+
+#: gui/dialogs/effects.py:666
+msgid "Enable Reverb"
+msgstr "Hall einschalten"
+
+#: gui/dialogs/effects.py:672
+msgid "Room Size"
+msgstr "Raumgröße"
+
+#: gui/dialogs/effects.py:679
+msgid "Damping"
+msgstr "Dämpfung"
+
+#: gui/dialogs/effects.py:686
+msgid "Wet Level"
+msgstr "Wet-Pegel"
+
+#: gui/dialogs/effects.py:693
+msgid "Dry Level"
+msgstr "Dry-Pegel"
+
+#: gui/dialogs/effects.py:700
+msgid "Width"
+msgstr "Breite"
+
+#: gui/dialogs/effects.py:720
+msgid "Delay"
+msgstr "Echo"
+
+#: gui/dialogs/effects.py:725
+msgid "Enable Delay"
+msgstr "Echo einschalten"
+
+#: gui/dialogs/effects.py:732
+msgid "Delay Time"
+msgstr "Zeit"
+
+#: gui/dialogs/effects.py:739
+msgid "Feedback"
+msgstr "Feedback"
+
+#: gui/dialogs/effects.py:746 gui/dialogs/effects.py:838
+msgid "Mix"
+msgstr "Mix"
+
+#: gui/dialogs/effects.py:766
+msgid "Equalizer"
+msgstr "Equalizer"
+
+#: gui/dialogs/effects.py:771
+msgid "Enable Equalizer"
+msgstr "Equalizer einschalten"
+
+#: gui/dialogs/effects.py:778
+msgid "Bass (200 Hz)"
+msgstr "Bass (200 Hz)"
+
+#: gui/dialogs/effects.py:785
+msgid "Mid (1 kHz)"
+msgstr "Mitten (1 kHz)"
+
+#: gui/dialogs/effects.py:792
+msgid "Treble (8 kHz)"
+msgstr "Höhen (8 kHz)"
+
+#: gui/dialogs/effects.py:812
+msgid "Chorus"
+msgstr "Chorus"
+
+#: gui/dialogs/effects.py:817
+msgid "Enable Chorus"
+msgstr "Chorus einschalten"
+
+#: gui/dialogs/effects.py:824
+msgid "Rate"
+msgstr "Wert"
+
+#: gui/dialogs/effects.py:831
+msgid "Depth"
+msgstr "Stärke"
+
+#: gui/dialogs/effects.py:858
+msgid "Compressor"
+msgstr "Kompressor"
+
+#: gui/dialogs/effects.py:863
+msgid "Enable Compressor"
+msgstr "Kompressor einschalten"
+
+#: gui/dialogs/effects.py:870 gui/dialogs/effects.py:926
+msgid "Threshold"
+msgstr "Schwellenwert"
+
+#: gui/dialogs/effects.py:878
+msgid "Ratio"
+msgstr "Verhältnis"
+
+#: gui/dialogs/effects.py:886
+msgid "Attack"
+msgstr "Ansprechzeit"
+
+#: gui/dialogs/effects.py:894 gui/dialogs/effects.py:934
+msgid "Release"
+msgstr "Abklingzeit"
+
+#: gui/dialogs/effects.py:914
+msgid "Limiter"
+msgstr "Limiter"
+
+#: gui/dialogs/effects.py:919
+msgid "Enable Limiter"
+msgstr "Limiter einschalten"
+
+#: gui/dialogs/effects.py:954 gui/dialogs/effects.py:966
+msgid "Gain"
+msgstr "Verstärkung"
+
+#: gui/dialogs/effects.py:959
+msgid "Enable Gain"
+msgstr "Verstärkung einschalten"
+
+# Dialogs
+#: gui/dialogs/options.py:34 gui/panels/active_deck.py:191
+msgid "Options"
+msgstr "Optionen"
+
+#: gui/dialogs/options.py:85
+msgid "General"
+msgstr "Allgemein"
+
+#: gui/dialogs/options.py:85
+msgid "Audio"
+msgstr "Audio"
+
+#: gui/dialogs/options.py:85
+msgid "Automation"
+msgstr "Automatisierung"
+
+#: gui/dialogs/options.py:86
+msgid "Recorder"
+msgstr "Aufnahme"
+
+#: gui/dialogs/options.py:86
+msgid "Streaming"
+msgstr "Streaming"
+
+#: gui/dialogs/options.py:86
+msgid "Text-to-Speech"
+msgstr "Sprachausgabe"
+
+#: gui/dialogs/options.py:88
+msgid "Cate&gories"
+msgstr "Kate&gorien"
+
+#: gui/dialogs/options.py:91 gui/dialogs/options.py:92
+msgid "Categories"
+msgstr "Kategorien"
+
+#: gui/dialogs/options.py:145 gui/dialogs/options.py:146
+#: gui/dialogs/project_properties.py:110 gui/dialogs/sleep_timer.py:100
+#: gui/dialogs/sleep_timer.py:101 gui/dialogs/sound_card_input.py:33
+msgid "&OK"
+msgstr "&OK"
+
+#: gui/dialogs/options.py:148 gui/dialogs/options.py:149
+#: gui/dialogs/project_properties.py:112 gui/dialogs/sleep_timer.py:103
+#: gui/dialogs/sleep_timer.py:104 gui/dialogs/sound_card_input.py:34
+#: gui/main_frame.py:1475
+msgid "&Cancel"
+msgstr "&Abbrechen"
+
+#: gui/dialogs/options.py:150 gui/dialogs/options.py:151
+msgid "&Apply"
+msgstr "Ü&bernehmen"
+
+#: gui/dialogs/options.py:217 gui/dialogs/options.py:227
+#: gui/dialogs/options.py:1100
+msgid "Language"
+msgstr "Sprache"
+
+#: gui/dialogs/options.py:222
+msgid "System language"
+msgstr "Systemsprache"
+
+#: gui/dialogs/options.py:238 gui/dialogs/options.py:245
+#: gui/dialogs/options.py:1102
+msgid "Initial number of decks"
+msgstr "Initiale Anzahl der Decks"
+
+#: gui/dialogs/options.py:252 gui/dialogs/options.py:260
+msgid "Theme"
+msgstr "Thema"
+
+#: gui/dialogs/options.py:256
+msgid "System"
+msgstr "System"
+
+#: gui/dialogs/options.py:256
+msgid "Light"
+msgstr "Hell"
+
+#: gui/dialogs/options.py:256
+msgid "Dark"
+msgstr "Dunkel"
+
+#: gui/dialogs/options.py:272
+msgid "&Reopen the last project on startup"
+msgstr "Letztes Projekt beim Start erneut &öffnen"
+
+#: gui/dialogs/options.py:289 gui/dialogs/options.py:304 gui/main_frame.py:941
+#: gui/menus.py:63
+msgid "Output Device"
+msgstr "Ausgabegerät"
+
+#: gui/dialogs/options.py:294
+msgid "System Default"
+msgstr "Systemstandard"
+
+#: gui/dialogs/options.py:294
+msgid "No Output (Livestream Only)"
+msgstr "Keine Ausgabe (nur Livestream)"
+
+#: gui/dialogs/options.py:316 gui/dialogs/options.py:323
+#: gui/dialogs/options.py:1123
+msgid "Buffer size"
+msgstr "Puffergröße"
+
+#: gui/dialogs/options.py:332 gui/dialogs/options.py:339
+#: gui/dialogs/options.py:1125
+msgid "Sample rate"
+msgstr "Abtastrate"
+
+#: gui/dialogs/options.py:380 gui/dialogs/project_properties.py:34
+msgid "Crossfade"
+msgstr "Überblendung"
+
+#: gui/dialogs/options.py:386 gui/dialogs/options.py:393
+#: gui/dialogs/project_properties.py:39 gui/dialogs/project_properties.py:49
+msgid "Switch Interval (seconds)"
+msgstr "Umschaltintervall (Sekunden)"
+
+#: gui/dialogs/options.py:399 gui/dialogs/options.py:400
+#: gui/dialogs/project_properties.py:54 gui/dialogs/project_properties.py:56
+msgid "Enable Crossfade"
+msgstr "Überblendung aktivieren"
+
+#: gui/dialogs/options.py:406 gui/dialogs/project_properties.py:62
+msgid "Crossfade Duration (seconds)"
+msgstr "Überblendungsdauer (Sekunden)"
+
+#: gui/dialogs/options.py:422 gui/dialogs/project_properties.py:71
+msgid "Level-Based Switching"
+msgstr "Pegelbasierte Umschaltung"
+
+#: gui/dialogs/options.py:426 gui/dialogs/options.py:427
+#: gui/dialogs/project_properties.py:75 gui/dialogs/project_properties.py:77
+msgid "Enable level-based switching"
+msgstr "Pegelbasierte Umschaltung aktivieren"
+
+#: gui/dialogs/options.py:434 gui/dialogs/options.py:440
+#: gui/dialogs/project_properties.py:84
+msgid "Threshold (dB)"
+msgstr "Schwellenwert (dB)"
+
+#: gui/dialogs/options.py:447 gui/dialogs/options.py:453
+#: gui/dialogs/project_properties.py:92
+msgid "Hysteresis (dB)"
+msgstr "Hysterese (dB)"
+
+#: gui/dialogs/options.py:460 gui/dialogs/options.py:466
+#: gui/dialogs/project_properties.py:100
+msgid "Hold Time (seconds)"
+msgstr "Haltezeit (Sekunden)"
+
+#: gui/dialogs/options.py:482 gui/dialogs/options.py:497
+msgid "Format"
+msgstr "Format"
+
+#: gui/dialogs/options.py:509 gui/dialogs/options.py:517
+msgid "Bitrate (compressed formats)"
+msgstr "Bitrate (komprimierte Formate)"
+
+#: gui/dialogs/options.py:536
+#, python-brace-format
+msgid "Note: Install FFmpeg for {formats} support."
+msgstr "Hinweis: Installiere FFmpeg für {formats}."
+
+#: gui/dialogs/options.py:545 gui/dialogs/options.py:552
+msgid "Bit Depth (WAV only)"
+msgstr "Bittiefe (nur WAV)"
+
+#: gui/dialogs/options.py:561 gui/dialogs/options.py:567
+msgid "Pre-Roll (seconds)"
+msgstr "Vorabpuffer (Sekunden)"
+
+#: gui/dialogs/options.py:568
+msgid "Buffer audio before recording starts (0 to disable)"
+msgstr "Audio vor der Aufnahme puffern (0 zum Ausschalten)"
+
+#: gui/dialogs/options.py:575 gui/dialogs/options.py:580
+msgid "Output Directory"
+msgstr "Ausgabeverzeichnis"
+
+#: gui/dialogs/options.py:583 gui/dialogs/options.py:584
+msgid "Browse"
+msgstr "Durchsuchen"
+
+#: gui/dialogs/options.py:595 gui/main_frame.py:2338 gui/main_frame.py:2503
+msgid "Choose recording output directory"
+msgstr "Aufnahme-Ausgabeverzeichnis wählen"
+
+#: gui/dialogs/options.py:606 gui/dialogs/options.py:609
+msgid "Server"
+msgstr "Server"
+
+#: gui/dialogs/options.py:614 gui/dialogs/options.py:618
+msgid "Port"
+msgstr "Port"
+
+#: gui/dialogs/options.py:623 gui/dialogs/options.py:626
+msgid "Mountpoint"
+msgstr "Einhängepunkt"
+
+#: gui/dialogs/options.py:631 gui/dialogs/options.py:637
+msgid "Username:Password"
+msgstr "Benutzername:Passwort"
+
+#: gui/dialogs/options.py:642 gui/dialogs/options.py:646
+msgid "Codec"
+msgstr "Codec"
+
+#: gui/dialogs/options.py:655 gui/dialogs/options.py:659
+msgid "Bitrate"
+msgstr "Bitrate"
+
+#: gui/dialogs/options.py:669 gui/dialogs/options.py:672
+msgid "Stream Name"
+msgstr "Stream-Name"
+
+#: gui/dialogs/options.py:677 gui/dialogs/options.py:680
+msgid "Description"
+msgstr "Beschreibung"
+
+#: gui/dialogs/options.py:685 gui/dialogs/options.py:688
+msgid "Genre"
+msgstr "Genre"
+
+#: gui/dialogs/options.py:693 gui/dialogs/options.py:696
+msgid "Website URL"
+msgstr "Website-URL"
+
+#: gui/dialogs/options.py:700 gui/dialogs/options.py:701
+msgid "List stream as public"
+msgstr "Öffentlicher Stream"
+
+#: gui/dialogs/options.py:705 gui/dialogs/options.py:706
+msgid "Connect livestream at startup"
+msgstr "Verbindung bei Programmstart"
+
+#: gui/dialogs/options.py:713 gui/dialogs/options.py:714
+msgid "Auto-reconnect on connection loss"
+msgstr "Automatisch neu verbinden bei Verbindungsabbruch"
+
+#: gui/dialogs/options.py:722 gui/dialogs/options.py:728
+msgid "Reconnect Wait (seconds)"
+msgstr "Wartezeit für Neuverbindung (Sekunden)"
+
+#: gui/dialogs/options.py:744 gui/dialogs/options.py:745
+msgid "Enable text-to-speech announcements"
+msgstr "Sprachausgabenansagen einschalten"
+
+#: gui/dialogs/options.py:753 gui/dialogs/options.py:763
+msgid "Engine"
+msgstr "Treiber"
+
+#: gui/dialogs/options.py:758
+msgid "(none available)"
+msgstr "(Keine verfügbar)"
+
+#: gui/dialogs/options.py:774 gui/dialogs/options.py:784
+msgid "Voice"
+msgstr "Stimme"
+
+#: gui/dialogs/options.py:781 gui/dialogs/options.py:837
+#: gui/dialogs/options.py:850 gui/dialogs/options.py:1185
+msgid "(default)"
+msgstr "(Standard)"
+
+#: gui/dialogs/options.py:795 gui/dialogs/options.py:802
+msgid "Rate (%, 0=default)"
+msgstr "Geschwindigkeit (%, 0=Standard)"
+
+#: gui/dialogs/options.py:808 gui/dialogs/options.py:814
+msgid "Volume (%, -1=default)"
+msgstr "Lautstärke (%, -1=Standard)"
+
+#: gui/dialogs/options.py:819 gui/dialogs/options.py:820
+msgid "Test voice"
+msgstr "Stimme testen"
+
+#: gui/dialogs/options.py:858
+msgid "Test announcement: Deck 1"
+msgstr "Testansage: Deck 1"
+
+#: gui/dialogs/options.py:1196
+msgid ""
+"The following settings require restarting the application to take effect:"
+msgstr ""
+"Die folgenden Einstellungen werden erst nach einem Neustart der Anwendung "
+"aktiv:"
+
+#: gui/dialogs/options.py:1197
+msgid "Restart Required"
+msgstr "Neustart notwendig"
+
+#: gui/dialogs/project_properties.py:15
+msgid "Project Properties"
+msgstr "Projekteigenschaften"
+
+#: gui/dialogs/sleep_timer.py:35 gui/main_frame.py:1972
+msgid "Sleep Timer"
+msgstr "Einschlaftimer"
+
+#: gui/dialogs/sleep_timer.py:55
+#, python-brace-format
+msgid "A sleep timer is running. Remaining time: {minutes} min"
+msgstr "Einschlaftimer läuft. Verbleibende Zeit: {minutes} Min"
+
+#: gui/dialogs/sleep_timer.py:62 gui/dialogs/sleep_timer.py:70
+msgid "Time until action (minutes)"
+msgstr "Zeit bis zur Aktion (Minuten)"
+
+#: gui/dialogs/sleep_timer.py:75 gui/dialogs/sleep_timer.py:84
+msgid "Action after timer expires"
+msgstr "Aktion nach Ablauf des Timers"
+
+#: gui/dialogs/sleep_timer.py:79
+msgid "Stop playback on all active decks"
+msgstr "Wiedergabe aller aktiven Decks stoppen"
+
+#: gui/dialogs/sleep_timer.py:80
+msgid "Stop playback and exit MultiDeck"
+msgstr "Wiedergabe stoppen und MultiDeck beenden"
+
+#: gui/dialogs/sleep_timer.py:81
+msgid "Stop playback and shut down the computer"
+msgstr "Wiedergabe stoppen und Computer herunterfahren"
+
+#: gui/dialogs/sleep_timer.py:94 gui/dialogs/sleep_timer.py:95
+msgid "Cancel Timer"
+msgstr "Timer abbrechen"
+
+#: gui/dialogs/sound_card_input.py:12
+msgid "Select Sound Card Input"
+msgstr "Soundkarteneingang wählen"
+
+#: gui/dialogs/sound_card_input.py:20
+msgid "Available input devices:"
+msgstr "Verfügbare Aufnahmegeräte:"
+
+#: gui/dialogs/sound_card_input.py:25
+msgid "Input device list"
+msgstr "Liste der Aufnahmegeräte"
+
+#: gui/dialogs/sound_card_input.py:63
+msgid "No input devices found"
+msgstr "Keine Aufnahmegeräte gefunden"
+
+#: gui/dialogs/sound_card_input.py:68
+#, python-brace-format
+msgid "{n} channel"
+msgstr "{n} Kanal"
+
+#: gui/dialogs/sound_card_input.py:68
+#, python-brace-format
+msgid "{n} channels"
+msgstr "{n} Kanäle"
+
+#: gui/main_frame.py:188 gui/main_frame.py:2311 gui/panels/active_deck.py:171
+msgid "Center"
+msgstr "Mitte"
+
+#: gui/main_frame.py:190 gui/main_frame.py:2312
+#, python-brace-format
+msgid "Left {}%"
+msgstr "Links {}%"
+
+#: gui/main_frame.py:192 gui/main_frame.py:2312
+#, python-brace-format
+msgid "Right {}%"
+msgstr "Rechts {}%"
+
+#: gui/main_frame.py:233 gui/main_frame.py:690
+msgid "Unknown file"
+msgstr "Unbekannte Datei"
+
+#: gui/main_frame.py:234
+#, python-brace-format
+msgid "Cannot play '{}': file not found ({})"
+msgstr "Kann '{}' nicht abspielen: Datei {} nicht gefunden"
+
+#: gui/main_frame.py:246
+msgid "Deck is empty"
+msgstr "Deck ist leer"
+
+#: gui/main_frame.py:260
+#, python-brace-format
+msgid "Cannot play '{}': audio could not be loaded"
+msgstr "Kann '{}' nicht abspielen: Audio konnte nicht geladen werden"
+
+# Messages
+#: gui/main_frame.py:270
+msgid "Ready"
+msgstr "Bereit"
+
+#: gui/main_frame.py:271 gui/main_frame.py:374 gui/main_frame.py:1709
+msgid "Mode"
+msgstr "Modus"
+
+#: gui/main_frame.py:271 gui/main_frame.py:369 gui/main_frame.py:1704
+msgid "Mixer"
+msgstr "Mixer"
+
+#: gui/main_frame.py:291
+msgid "Use Global Default"
+msgstr "Verwende globalen Standard"
+
+#: gui/main_frame.py:370 gui/main_frame.py:1705
+msgid "Solo"
+msgstr "Solo"
+
+#: gui/main_frame.py:371 gui/main_frame.py:1706
+msgid "Automatic"
+msgstr "Automatik"
+
+#: gui/main_frame.py:372 gui/main_frame.py:1707
+msgid "Multiroom"
+msgstr "Multiroom"
+
+#: gui/main_frame.py:393 gui/main_frame.py:2190 gui/main_frame.py:2212
+#: gui/main_frame.py:2228
+#, python-brace-format
+msgid "Active deck: {}"
+msgstr "Aktives Deck: {}"
+
+#: gui/main_frame.py:423
+msgid "Pause All"
+msgstr "Alle Pausieren"
+
+# Buttons and controls
+#: gui/main_frame.py:425 gui/panels/mixer.py:53
+msgid "Play All"
+msgstr "Alle Abspielen"
+
+#: gui/main_frame.py:440
+msgid "Choose an audio file"
+msgstr "Wählen Sie eine Audiodatei"
+
+#: gui/main_frame.py:451 gui/main_frame.py:1812
+#, python-brace-format
+msgid "Loaded: {}"
+msgstr "Geladen: {}"
+
+#: gui/main_frame.py:459 gui/main_frame.py:1819
+msgid "Failed to load audio file"
+msgstr "Fehler beim Laden der Audiodatei"
+
+#: gui/main_frame.py:459 gui/main_frame.py:485 gui/main_frame.py:506
+#: gui/main_frame.py:582 gui/main_frame.py:678 gui/main_frame.py:1348
+#: gui/main_frame.py:1565 gui/main_frame.py:1638 gui/main_frame.py:1805
+#: gui/main_frame.py:1819 gui/main_frame.py:1824 gui/main_frame.py:2117
+#: gui/main_frame.py:2161 gui/main_frame.py:2515 gui/playlist_service.py:156
+#: main.py:98 main.py:106 main.py:116
+msgid "Error"
+msgstr "Fehler"
+
+#: gui/main_frame.py:467
+msgid "Enter stream URL:"
+msgstr "Stream-URL eingeben:"
+
+#: gui/main_frame.py:468
+msgid "Load Stream"
+msgstr "Stream laden"
+
+#: gui/main_frame.py:477 gui/main_frame.py:1795
+#, python-brace-format
+msgid "Loaded stream: {}"
+msgstr "Stream geladen: {}"
+
+#: gui/main_frame.py:485 gui/main_frame.py:1805
+msgid "Failed to load stream"
+msgstr "Fehler beim Laden des Streams"
+
+#: gui/main_frame.py:499
+#, python-brace-format
+msgid "Loaded sound card input: {}"
+msgstr "Soundkarteneingang: {}"
+
+#: gui/main_frame.py:505
+msgid "Failed to open sound card input"
+msgstr "Fehler beim Öffnen des Soundkarteneingangs"
+
+#: gui/main_frame.py:516
+msgid "Choose an intro audio file"
+msgstr "Wähle eine Intro-Audiodatei"
+
+#: gui/main_frame.py:524
+#, python-brace-format
+msgid "Intro set for {}: {}"
+msgstr "Intro für {} festgelegt: {}"
+
+#: gui/main_frame.py:536
+#, python-brace-format
+msgid "Intro cleared for {}"
+msgstr "Intro für {} gelöscht"
+
+#: gui/main_frame.py:562
+#, python-brace-format
+msgid "[Input] {}"
+msgstr "[Eingang] {}"
+
+#: gui/main_frame.py:568
+msgid "File missing"
+msgstr "Datei fehlt"
+
+#: gui/main_frame.py:575
+msgid "Main device"
+msgstr "Hauptgerät"
+
+#: gui/main_frame.py:580
+msgid "missing"
+msgstr "fehlt"
+
+#: gui/main_frame.py:644 gui/panels/active_deck.py:90
+msgid "No deck selected"
+msgstr "Kein Deck ausgewählt"
+
+# Deck states
+#: gui/main_frame.py:674
+msgid "Empty"
+msgstr "Leer"
+
+#: gui/main_frame.py:675
+msgid "Loaded"
+msgstr "Geladen"
+
+#: gui/main_frame.py:676
+msgid "Playing"
+msgstr "Wird abgespielt"
+
+#: gui/main_frame.py:677
+msgid "Paused"
+msgstr "Pausiert"
+
+#: gui/main_frame.py:690
+#, python-brace-format
+msgid "Error - file not found: {}"
+msgstr "Fehler - Datei nicht gefunden: {}"
+
+#: gui/main_frame.py:695
+msgid "Intro"
+msgstr "Intro"
+
+#: gui/main_frame.py:702 gui/main_frame.py:703
+msgid "Pause"
+msgstr "Pausieren"
+
+# Buttons and controls
+#: gui/main_frame.py:705 gui/main_frame.py:706 gui/panels/active_deck.py:53
+#: gui/panels/active_deck.py:111 gui/panels/active_deck.py:112
+msgid "Play"
+msgstr "Abspielen"
+
+#: gui/main_frame.py:768 gui/main_frame.py:952
+msgid "Stop Recording Deck"
+msgstr "Deckaufnahme beenden"
+
+#: gui/main_frame.py:770 gui/main_frame.py:954 gui/menus.py:68
+msgid "Start Recording Deck"
+msgstr "Deckaufnahme starten"
+
+#: gui/main_frame.py:788
+msgid "Stop Livestream"
+msgstr "Livestream stoppen"
+
+#: gui/main_frame.py:788
+msgid "Start Livestream"
+msgstr "Livestream starten"
+
+#: gui/main_frame.py:867
+#, python-brace-format
+msgid "Output device updated for {}"
+msgstr "Ausgabegerät für {} geändert"
+
+#: gui/main_frame.py:925 gui/menus.py:51
+msgid "New Deck"
+msgstr "Neues Deck"
+
+#: gui/main_frame.py:926 gui/main_frame.py:1016 gui/menus.py:52
+msgid "Delete Deck"
+msgstr "Deck löschen"
+
+#: gui/main_frame.py:927 gui/menus.py:53
+msgid "Move Deck Up"
+msgstr "Deck nach oben verschieben"
+
+#: gui/main_frame.py:928 gui/menus.py:54
+msgid "Move Deck Down"
+msgstr "Deck nach unten verschieben"
+
+#: gui/main_frame.py:933 gui/menus.py:56
+msgid "Load File"
+msgstr "Datei laden"
+
+#: gui/main_frame.py:934 gui/menus.py:57
+msgid "Load URL"
+msgstr "URL laden"
+
+#: gui/main_frame.py:935 gui/menus.py:58
+msgid "Load sound card input"
+msgstr "Soundkarteneingang laden"
+
+#: gui/main_frame.py:937 gui/menus.py:60
+msgid "Set Intro File"
+msgstr "Introdatei festlegen"
+
+#: gui/main_frame.py:938 gui/menus.py:61
+msgid "Clear Intro File"
+msgstr "Introdatei löschen"
+
+#: gui/main_frame.py:944 gui/main_frame.py:998 gui/menus.py:65
+msgid "Rename Deck"
+msgstr "Deck umbenennen"
+
+#: gui/main_frame.py:945 gui/menus.py:66
+msgid "Unload Deck"
+msgstr "Deck entladen"
+
+#: gui/main_frame.py:946 gui/menus.py:67
+msgid "Deck Audio Effects"
+msgstr "Deck-Audioeffekte"
+
+#: gui/main_frame.py:988
+msgid "at last position"
+msgstr "an letzter Position"
+
+#: gui/main_frame.py:990
+msgid "at first position"
+msgstr "an erster Position"
+
+#: gui/main_frame.py:992
+#, python-brace-format
+msgid "at position {}"
+msgstr "an Position {}"
+
+#: gui/main_frame.py:993
+#, python-brace-format
+msgid "Added {deck_name} {position} to deck list"
+msgstr "{deck_name} {position} zur Deckliste hinzugefügt"
+
+#: gui/main_frame.py:998
+msgid "Enter new deck name:"
+msgstr "Neuen Deck-Namen eingeben:"
+
+#: gui/main_frame.py:1015
+#, python-brace-format
+msgid "Delete deck '{}'? Its loaded source will be unloaded."
+msgstr "Deck '{}' löschen? Die geladene Quelle wird dabei entladen."
+
+#: gui/main_frame.py:1034
+#, python-brace-format
+msgid "Deleted {}"
+msgstr "{} gelöscht"
+
+#: gui/main_frame.py:1259 gui/main_frame.py:1273 gui/main_frame.py:1287
+#: gui/main_frame.py:1301 gui/main_frame.py:1340
+#, python-brace-format
+msgid "{}: {} / {}"
+msgstr "{}: {} / {}"
+
+#: gui/main_frame.py:1314
+msgid "No seekable audio loaded in the selected deck."
+msgstr "Keine spulbare Audiodatei im ausgewählten Deck geladen."
+
+#: gui/main_frame.py:1315 gui/main_frame.py:1327 gui/menus.py:84
+msgid "Jump to time"
+msgstr "Zu Zeitmarke springen"
+
+#: gui/main_frame.py:1326
+msgid "Enter time (M:SS or H:MM:SS):"
+msgstr "Zeit eingeben (M:SS oder H:MM:SS):"
+
+#: gui/main_frame.py:1326
+msgid "Duration"
+msgstr "Dauer"
+
+#: gui/main_frame.py:1347
+msgid "Invalid time format. Use M:SS or H:MM:SS (e.g., 1:30 or 1:05:30)"
+msgstr ""
+"Ungültiges Zeitformat. Verwende M:SS oder H:MM:SS (z.B. 1:30 oder 1:05:30)"
+
+#: gui/main_frame.py:1431
+msgid "[Unsaved]"
+msgstr "[Nicht gespeichert]"
+
+#: gui/main_frame.py:1467
+msgid "Untitled Project"
+msgstr "Unbenanntes Projekt"
+
+#: gui/main_frame.py:1471
+#, python-brace-format
+msgid "Save changes to {}?"
+msgstr "Änderungen an {} speichern?"
+
+#: gui/main_frame.py:1472
+msgid "Unsaved Changes"
+msgstr "Ungespeicherte Änderungen"
+
+#: gui/main_frame.py:1475 gui/main_frame.py:2145
+msgid "&Yes"
+msgstr "&Ja"
+
+#: gui/main_frame.py:1475 gui/main_frame.py:2145
+msgid "&No"
+msgstr "&Nein"
+
+#: gui/main_frame.py:1485 gui/main_frame.py:1590
+msgid "Save Project As"
+msgstr "Projekt speichern unter"
+
+#: gui/main_frame.py:1546
+msgid "New project created"
+msgstr "Neues Projekt erstellt"
+
+#: gui/main_frame.py:1555
+msgid "Open Project"
+msgstr "Projekt öffnen"
+
+#: gui/main_frame.py:1565 main.py:115
+#, python-brace-format
+msgid "Failed to open project: {}"
+msgstr "Fehler beim Öffnen des Projekts: {}"
+
+#: gui/main_frame.py:1577
+#, python-brace-format
+msgid "Opened: {}"
+msgstr "Geöffnet: {}"
+
+#: gui/main_frame.py:1635
+#, python-brace-format
+msgid "Saved: {}"
+msgstr "Gespeichert: {}"
+
+#: gui/main_frame.py:1638
+#, python-brace-format
+msgid "Failed to save project: {}"
+msgstr "Fehler beim Speichern des Projekts: {}"
+
+#: gui/main_frame.py:1725
+msgid "Status bar visible"
+msgstr "Statusleiste sichtbar"
+
+#: gui/main_frame.py:1728
+msgid "Status bar not visible"
+msgstr "Statusleiste ausgeblendet"
+
+#: gui/main_frame.py:1774
+msgid "&Clear Recent Files"
+msgstr "&Letzte Dateien leeren"
+
+#: gui/main_frame.py:1824
+msgid "File not found. Removed from recent files."
+msgstr "Datei nicht gefunden, wird aus letzte Dateien entfernt."
+
+#: gui/main_frame.py:1830
+msgid "Recent files cleared"
+msgstr "Letzte Dateien geleert"
+
+#: gui/main_frame.py:1856
+msgid "Dark theme active"
+msgstr "Dunkles Theme aktiv"
+
+#: gui/main_frame.py:1858
+msgid "Light theme active"
+msgstr "Helles Theme aktiv"
+
+#: gui/main_frame.py:1930
+#, python-brace-format
+msgid "Sleep timer started: {minutes} min"
+msgstr "Einschlaftimer gestartet: {minutes} Min"
+
+#: gui/main_frame.py:1940
+msgid "Sleep timer cancelled"
+msgstr "Einschlaftimer abgebrochen"
+
+#: gui/main_frame.py:1963
+msgid "Sleep timer expired: stopping playback and exiting"
+msgstr ""
+"Einschlaftimer abgelaufen: Wiedergabe wird gestoppt und das Programm beendet"
+
+#: gui/main_frame.py:1968
+msgid "Sleep timer expired: shutting down computer"
+msgstr "Einschlaftimer abgelaufen: Computer wird heruntergefahren"
+
+#: gui/main_frame.py:1971
+msgid ""
+"Playback was stopped, but the computer could not be shut down automatically."
+msgstr ""
+"Die Wiedergabe wurde gestoppt, aber der Computer konnte nicht automatisch "
+"heruntergefahren werden."
+
+#: gui/main_frame.py:1977
+msgid "Sleep timer expired: playback stopped"
+msgstr "Einschlaftimer abgelaufen: Wiedergabe gestoppt"
+
+#: gui/main_frame.py:1978
+msgid "Sleep timer expired"
+msgstr "Einschlaftimer abgelaufen"
+
+#: gui/main_frame.py:2061
+msgid "Livestream could not be restarted with the new settings."
+msgstr ""
+"Livestream konnte mit den geänderten Einstellungen nicht neu gestartet "
+"werden."
+
+#: gui/main_frame.py:2062 gui/main_frame.py:2449 gui/main_frame.py:2464
+msgid "Streaming Error"
+msgstr "Streaming-Fehler"
+
+#: gui/main_frame.py:2097
+msgid "Changing audio device..."
+msgstr "Audiogerät wird gewechselt..."
+
+#: gui/main_frame.py:2102
+msgid "Audio device changed successfully"
+msgstr "Audiogerät erfolgreich gewechselt"
+
+#: gui/main_frame.py:2105
+msgid "Audio device change failed"
+msgstr "Audiogerät konnte nicht gewechselt werden"
+
+#: gui/main_frame.py:2107
+msgid ""
+"Failed to change audio device. The application will use the previous device."
+msgstr ""
+"Fehler beim Wechsel des Audiogeräts. Das vorherige Gerät wird verwendet."
+
+#: gui/main_frame.py:2108
+msgid "Warning"
+msgstr "Warnung"
+
+#: gui/main_frame.py:2114
+msgid "Audio device error"
+msgstr "Audiogerätefehler"
+
+#: gui/main_frame.py:2116
+#, python-brace-format
+msgid "Error changing audio device: {}"
+msgstr "Fehler beim Wechsel des Audiogeräts: {}"
+
+#: gui/main_frame.py:2141
+msgid "Documentation file not found. Open developer's website instead?"
+msgstr ""
+"Dokumentationsdatei nicht gefunden. Soll stattdessen die Entwickler-Website "
+"geöffnet werden?"
+
+#: gui/main_frame.py:2142
+msgid "Documentation not found"
+msgstr "Dokumentation nicht gefunden"
+
+#: gui/main_frame.py:2161
+msgid "Error opening website"
+msgstr "Fehler beim Öffnen der Webseite"
+
+#: gui/main_frame.py:2168
+msgid "Code name"
+msgstr "Codename"
+
+#: gui/main_frame.py:2169
+msgid "Accessible cross-platform audio player for simultaneous playback"
+msgstr ""
+"Barrierefreier plattformübergreifender Audio-Player für gleichzeitiges "
+"Abspielen"
+
+#: gui/main_frame.py:2197
+msgid "Deck not available"
+msgstr "Deck nicht verfügbar"
+
+#: gui/main_frame.py:2204 gui/main_frame.py:2220
+msgid "No decks available"
+msgstr "Keine Decks verfügbar"
+
+#: gui/main_frame.py:2239
+#, python-brace-format
+msgid "Mute {} on"
+msgstr "Stummschaltung auf {} aktiv"
+
+#: gui/main_frame.py:2241
+#, python-brace-format
+msgid "Mute {} off"
+msgstr "Stummschaltung auf {} inaktiv"
+
+#: gui/main_frame.py:2252
+#, python-brace-format
+msgid "Loop {} on"
+msgstr "Wiederholung auf {} aktiv"
+
+#: gui/main_frame.py:2254
+#, python-brace-format
+msgid "Loop {} off"
+msgstr "Wiederholung auf {} inaktiv"
+
+#: gui/main_frame.py:2297
+#, python-brace-format
+msgid "{}: Volume {}%"
+msgstr "{}: Lautstärke {}%"
+
+#: gui/main_frame.py:2314
+#, python-brace-format
+msgid "{}: Balance {}"
+msgstr "{}: Balance {}"
+
+#: gui/main_frame.py:2350
+#, python-brace-format
+msgid "Recording: {}"
+msgstr "Aufnahme: {}"
+
+#: gui/main_frame.py:2354
+msgid "Stop &Recording"
+msgstr "&Aufnahme beenden"
+
+#: gui/main_frame.py:2358 gui/main_frame.py:2549
+#, python-brace-format
+msgid "Recording stopped: {}"
+msgstr "Aufnahme gestoppt: {}"
+
+#: gui/main_frame.py:2362 gui/menus.py:103
+msgid "Start &Recording"
+msgstr "&Aufnahme starten"
+
+#: gui/main_frame.py:2366
+msgid "Livestream started"
+msgstr "Livestream gestartet"
+
+#: gui/main_frame.py:2368
+#, python-brace-format
+msgid "Livestream started: {}"
+msgstr "Livestream gestartet: {}"
+
+#: gui/main_frame.py:2383 gui/main_frame.py:2384
+msgid "Livestream stopped"
+msgstr "Livestream gestoppt"
+
+#: gui/main_frame.py:2443
+msgid "Streaming Settings Incomplete"
+msgstr "Streamingeinstellungen unvollständig"
+
+#: gui/main_frame.py:2448
+msgid "FFmpeg is required to start the livestream."
+msgstr "FFmpeg wird zum Starten des Livestreams benötigt."
+
+#: gui/main_frame.py:2463
+msgid "Failed to start livestream."
+msgstr "Fehler beim Starten des Livestreams."
+
+#: gui/main_frame.py:2491
+#, python-brace-format
+msgid ""
+"Playback for '{}' has not started yet. The recording will only contain audio "
+"once deck playback starts. No preceding silence will be recorded.\n"
+"\n"
+"Start recording anyway?"
+msgstr ""
+"Die Wiedergabe für '{}' wurde noch nicht gestartet. Die Aufnahme enthält "
+"erst dann Ton, wenn die Wiedergabe im Deck beginnt. Vorherige Stille wird "
+"nicht aufgezeichnet.\n"
+"\n"
+"Aufnahme trotzdem starten?"
+
+#: gui/main_frame.py:2495
+msgid "Deck Playback Not Started"
+msgstr "Deckwiedergabe nicht gestartet"
+
+#: gui/main_frame.py:2514
+#, python-brace-format
+msgid "Failed to start recording for {}"
+msgstr "Fehler beim Starten der Aufnahme von {}"
+
+#: gui/main_frame.py:2533
+#, python-brace-format
+msgid "Recording started: {}"
+msgstr "Aufnahme gestartet: {}"
+
+# Menu items
+#: gui/menus.py:12
+msgid "&File"
+msgstr "&Datei"
+
+#: gui/menus.py:13
+msgid "&Deck"
+msgstr "D&eck"
+
+#: gui/menus.py:14
+msgid "&Playback"
+msgstr "&Wiedergabe"
+
+#: gui/menus.py:15
+msgid "&View"
+msgstr "&Ansicht"
+
+#: gui/menus.py:16
+msgid "&Tools"
+msgstr "Wer&kzeuge"
+
+#: gui/menus.py:17
+msgid "&Help"
+msgstr "&Hilfe"
+
+#: gui/menus.py:26
+msgid "&New Project"
+msgstr "&Neues Projekt"
+
+#: gui/menus.py:27
+msgid "&Open Project"
+msgstr "Projekt ö&ffnen"
+
+#: gui/menus.py:28
+msgid "&Save Project"
+msgstr "Projekt &speichern"
+
+#: gui/menus.py:29
+msgid "Save Project &As"
+msgstr "Projekt speichern &unter"
+
+#: gui/menus.py:31
+msgid "Project &Properties"
+msgstr "Projektei&genschaften"
+
+#: gui/menus.py:35
+msgid "&Import M3U Playlist"
+msgstr "M3U-Playliste &importieren"
+
+#: gui/menus.py:36
+msgid "&Export M3U Playlist"
+msgstr "M3U-Playliste &exportieren"
+
+#: gui/menus.py:40
+msgid "&Recent Files"
+msgstr "&Letzte Dateien"
+
+#: gui/menus.py:44
+msgid "E&xit"
+msgstr "&Beenden"
+
+#: gui/menus.py:77 gui/panels/mixer.py:54
+msgid "Play/Pause all decks"
+msgstr "Wiedergabe/Pause aller Decks"
+
+#: gui/menus.py:78
+msgid "Stop all decks"
+msgstr "Alle Decks stoppen"
+
+#: gui/menus.py:80
+msgid "Play active deck"
+msgstr "Aktives Deck abspielen"
+
+#: gui/menus.py:81
+msgid "Stop active deck"
+msgstr "Aktives Deck stoppen"
+
+#: gui/menus.py:82
+msgid "Toggle Loop"
+msgstr "Wiederholung umschalten"
+
+#: gui/menus.py:83
+msgid "Toggle Mute"
+msgstr "Stummschaltung umschalten"
+
+#: gui/menus.py:91
+msgid "&Status Bar"
+msgstr "&Statusleiste"
+
+#: gui/menus.py:93
+msgid "&Level Meter"
+msgstr "&Pegelanzeige"
+
+#: gui/menus.py:96
+msgid "Toggle &Theme"
+msgstr "&Theme wechseln"
+
+#: gui/menus.py:104
+msgid "Start &Livestream"
+msgstr "&Livestream starten"
+
+#: gui/menus.py:106
+msgid "Audio &Effects"
+msgstr "Audio&effekte"
+
+#: gui/menus.py:107
+msgid "Sleep &Timer"
+msgstr "Einschlaf&timer"
+
+# Dialogs
+#: gui/menus.py:109
+msgid "&Options"
+msgstr "&Optionen"
+
+#: gui/menus.py:116
+msgid "&Documentation"
+msgstr "&Dokumentation"
+
+#: gui/menus.py:117
+msgid "Open &Website"
+msgstr "&Webseite öffnen"
+
+#: gui/menus.py:119
+msgid "&About"
+msgstr "Ü&ber"
+
+#: gui/panels/active_deck.py:27 gui/panels/active_deck.py:28
+#: gui/panels/active_deck.py:32 gui/panels/active_deck.py:60
+#: gui/panels/active_deck.py:61
+msgid "Deck Selection"
+msgstr "Deckauswahl"
+
+#: gui/panels/active_deck.py:54
+msgid "Status"
+msgstr "Status"
+
+#: gui/panels/active_deck.py:55
+msgid "Deck"
+msgstr "Deck"
+
+# Menu items
+#: gui/panels/active_deck.py:56
+msgid "File"
+msgstr "Datei"
+
+#: gui/panels/active_deck.py:57
+msgid "Output"
+msgstr "Ausgabe"
+
+#: gui/panels/active_deck.py:71
+msgid "Active Deck Controls"
+msgstr "Steuerung für aktives Deck"
+
+#: gui/panels/active_deck.py:106 gui/panels/active_deck.py:107
+msgid "Menu"
+msgstr "Menü"
+
+#: gui/panels/active_deck.py:116 gui/panels/active_deck.py:117
+msgid "Stop"
+msgstr "Stopp"
+
+#: gui/panels/active_deck.py:139 gui/panels/active_deck.py:153
+msgid "Volume"
+msgstr "Lautstärke"
+
+#: gui/panels/active_deck.py:142
+msgid "Deck volume"
+msgstr "Decklautstärke"
+
+#: gui/panels/active_deck.py:165 gui/panels/active_deck.py:179
+msgid "Balance"
+msgstr "Balance"
+
+#: gui/panels/active_deck.py:168
+msgid "Left / Right"
+msgstr "Links / Rechts"
+
+#: gui/panels/active_deck.py:194 gui/panels/active_deck.py:195
+msgid "Mute"
+msgstr "Stumm"
+
+#: gui/panels/active_deck.py:199 gui/panels/active_deck.py:200
+msgid "Loop"
+msgstr "Wiederholen"
+
+#: gui/panels/active_deck.py:212 gui/panels/active_deck.py:213
+#: gui/panels/active_deck.py:215
+msgid "Position"
+msgstr "Position"
+
+#: gui/panels/active_deck.py:220
+msgid "Current position"
+msgstr "Aktuelle Position"
+
+#: gui/panels/active_deck.py:224
+msgid "Total duration"
+msgstr "Gesamtdauer"
+
+#: gui/panels/active_deck.py:232
+msgid "Playback position"
+msgstr "Wiedergabeposition"
+
+#: gui/panels/active_deck.py:246 gui/panels/active_deck.py:247
+#: gui/panels/active_deck.py:249
+msgid "Level"
+msgstr "Pegel"
+
+# Operating modes
+#: gui/panels/mixer.py:26
+msgid "Operating Mode"
+msgstr "Betriebsmodus"
+
+#: gui/panels/mixer.py:28
+msgid "Mixer Mode"
+msgstr "Mixer-Modus"
+
+#: gui/panels/mixer.py:29
+msgid "Solo Mode"
+msgstr "Solo-Modus"
+
+#: gui/panels/mixer.py:30
+msgid "Automatic Mode"
+msgstr "Automatik-Modus"
+
+#: gui/panels/mixer.py:31
+msgid "Multiroom Mode"
+msgstr "Multiroom-Modus"
+
+#: gui/panels/mixer.py:50
+msgid "Global Playback"
+msgstr "Globale Wiedergabe"
+
+#: gui/panels/mixer.py:57
+msgid "Stop All"
+msgstr "Alle Stoppen"
+
+#: gui/panels/mixer.py:58
+msgid "Stop all decks and reset positions"
+msgstr "Alle Decks stoppen und Position zurücksetzen"
+
+#: gui/panels/mixer.py:62 gui/panels/mixer.py:63
+msgid "Enable Livestream"
+msgstr "Livestream einschalten"
+
+#: gui/panels/mixer.py:75 gui/panels/mixer.py:78
+msgid "Master Volume"
+msgstr "Masterlautstärke"
+
+#: gui/playlist_service.py:20
+msgid "Import M3U Playlist"
+msgstr "M3U-Playliste importieren"
+
+#: gui/playlist_service.py:21
+msgid "All Files"
+msgstr "Alle Dateien"
+
+#: gui/playlist_service.py:31
+msgid "No valid entries found in playlist."
+msgstr "Keine gültigen Einträge in Playliste gefunden."
+
+#: gui/playlist_service.py:32
+msgid "Import M3U"
+msgstr "M3U importieren"
+
+#: gui/playlist_service.py:66
+#, python-brace-format
+msgid ""
+"Imported {loaded} entries. {skipped} entries skipped due to load errors."
+msgstr ""
+"{loaded} Einträge importiert. {skipped} Einträge wurden wegen Ladefehlern "
+"übersprungen."
+
+#: gui/playlist_service.py:71
+#, python-brace-format
+msgid "Imported {loaded} entries."
+msgstr "{loaded} Einträge importiert."
+
+#: gui/playlist_service.py:119
+msgid "No files loaded in any deck. Nothing to export."
+msgstr "Auf keinem der Decks sind Dateien geladen. Nichts zu Exportieren."
+
+#: gui/playlist_service.py:120
+msgid "Export M3U"
+msgstr "M3U exportieren"
+
+#: gui/playlist_service.py:127
+msgid "Export M3U Playlist"
+msgstr "M3U-Playliste exportieren"
+
+#: gui/playlist_service.py:146
+#, python-brace-format
+msgid "Exported {count} entries to {file}"
+msgstr "{count} Einträge in {file} exportiert."
+
+#: gui/playlist_service.py:155
+#, python-brace-format
+msgid "Failed to write playlist file: {}"
+msgstr "Fehler beim Schreiben der Playlist-Datei: {}"
+
+#: main.py:97
+#, python-brace-format
+msgid "Project file not found: {}"
+msgstr "Projektdatei nicht gefunden: {}"
+
+#: main.py:105
+#, python-brace-format
+msgid ""
+"Invalid project file format: {}\n"
+"Expected .mdap file."
+msgstr ""
+"Ungültiges Projektdateiformat: {}\n"
+".mdap-Datei erwartet."
+
+#~ msgid "Master: Built-in Effects"
+#~ msgstr "Master: Integrierte Effekte"
+
+#~ msgid "Master: VST Plugins"
+#~ msgstr "Master: VST-Plugins"
+
+#~ msgid "Number of decks"
+#~ msgstr "Anzahl der Decks"
+
+#, python-brace-format
+#~ msgid ""
+#~ "Imported {loaded} entries. {skipped} entries skipped (no free decks or "
+#~ "load errors)."
+#~ msgstr ""
+#~ "{loaded} Einträge importiert. {skipped} Einträge übersprungen (keine "
+#~ "freien Decks oder Ladefehler)."
+
+#, python-brace-format
+#~ msgid "Changed theme to {theme}"
+#~ msgstr "Zum Theme {theme} gewechselt"
+
+#~ msgid "Action"
+#~ msgstr "Aktion"
+
+#, python-brace-format
+#~ msgid "Toggle Mute {}"
+#~ msgstr "Stummschaltung für {} umschalten"
+
+#, python-brace-format
+#~ msgid "Toggle Loop {}"
+#~ msgstr "Wiederholung für {} umschalten"
+
+msgid "Deck &Recorder..."
+msgstr "Deck-&Aufnahme..."
+
+msgid "&Recorder..."
+msgstr "&Aufnahme..."
+
+msgid "Recording Schedule"
+msgstr "Aufnahmezeit"
+
+msgid "&Enabled"
+msgstr "&Aktiviert"
+
+msgid "&Start time (HH:MM):"
+msgstr "&Startzeit (HH:MM):"
+
+msgid "&End time (HH:MM):"
+msgstr "&Endzeit (HH:MM):"
+
+msgid "Start on weekdays"
+msgstr "Start an Wochentagen"
+
+msgid "Monday"
+msgstr "Montag"
+
+msgid "Tuesday"
+msgstr "Dienstag"
+
+msgid "Wednesday"
+msgstr "Mittwoch"
+
+msgid "Thursday"
+msgstr "Donnerstag"
+
+msgid "Friday"
+msgstr "Freitag"
+
+msgid "Saturday"
+msgstr "Samstag"
+
+msgid "Sunday"
+msgstr "Sonntag"
+
+msgid "Local time. An end time before the start time ends on the following day."
+msgstr "Ortszeit. Liegt die Endzeit vor der Startzeit, endet die Aufnahme am folgenden Tag."
+
+msgid "Enter valid, different start and end times in HH:MM format and select at least one weekday."
+msgstr "Gib gültige, unterschiedliche Start- und Endzeiten im Format HH:MM ein und wähle mindestens einen Wochentag."
+
+msgid "Invalid Schedule"
+msgstr "Ungültige Aufnahmezeit"
+
+msgid "Recorder: {}"
+msgstr "Aufnahme: {}"
+
+msgid "Recording"
+msgstr "Aufnahme"
+
+msgid "Planner"
+msgstr "Planer"
+
+msgid "Stopped"
+msgstr "Gestoppt"
+
+msgid "&Record"
+msgstr "&Aufnahme"
+
+msgid "&Stop"
+msgstr "&Stopp"
+
+msgid "Enabled"
+msgstr "Aktiviert"
+
+msgid "Start"
+msgstr "Start"
+
+msgid "End"
+msgstr "Ende"
+
+msgid "Weekdays"
+msgstr "Wochentage"
+
+msgid "Recording Schedules"
+msgstr "Aufnahmezeiten"
+
+msgid "&Add..."
+msgstr "&Hinzufügen..."
+
+msgid "&Edit..."
+msgstr "&Bearbeiten..."
+
+msgid "&Delete"
+msgstr "&Löschen"
+
+msgid "Schedules run while MultiDeck is open and are saved with the project. They use the output directory from Recorder settings."
+msgstr "Zeitpläne werden ausgeführt, solange MultiDeck geöffnet ist, und mit dem Projekt gespeichert. Sie verwenden das Ausgabeverzeichnis aus den Aufnahmeoptionen."
+
+msgid "&Resume"
+msgstr "&Fortsetzen"
+
+msgid "&Pause"
+msgstr "&Pause"
+
+msgid "Scheduled recording failed: choose an output directory in Recorder settings."
+msgstr "Geplante Aufnahme fehlgeschlagen: Wähle ein Ausgabeverzeichnis in den Aufnahmeoptionen."
+
+msgid "Scheduled recording failed to start."
+msgstr "Geplante Aufnahme konnte nicht gestartet werden."
+
+msgid "&Name:"
+msgstr "&Name:"
+
+msgid "Name"
+msgstr "Name"
+
+msgid "Start &playback with recording"
+msgstr "Wiedergabe mit Aufnahme &starten"

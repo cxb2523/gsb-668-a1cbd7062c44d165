@@ -1,0 +1,203 @@
+"""
+Internationalization (i18n) utilities using gettext
+"""
+
+import gettext
+import locale
+import os
+import sys
+from pathlib import Path
+from typing import Optional
+
+from utils.logger import get_logger
+
+# Module logger
+logger = get_logger(__name__)
+
+
+
+class I18n:
+    """Internationalization manager"""
+    SYSTEM_LANGUAGE = 'system'
+
+    def __init__(self, domain: str = 'multideck', language: Optional[str] = None):
+        """
+        Initialize i18n manager.
+
+        Args:
+            domain: The gettext domain (usually the project name)
+            language: Language code (e.g., 'en', 'de') or None for system default
+        """
+        self.domain = domain
+        self.locale_dir = self.get_locale_dir()
+        self.language = self._normalize_language(language)
+        self.translation: gettext.NullTranslations = gettext.NullTranslations()
+        self._load_translation()
+
+    def _normalize_language(self, language: Optional[str]) -> str:
+        """Resolve stored language values to an actual language code."""
+        if not language or language == self.SYSTEM_LANGUAGE:
+            return self._get_system_language()
+        return language
+
+    def get_locale_dir(self) -> Path:
+        """Get path to locale directory"""
+        # Get project root directory
+        if hasattr(__import__('sys'), 'frozen'):
+            # Running as compiled executable
+            root = Path(sys.executable).parent
+        else:
+            # Running as script
+            root = Path(__file__).parent.parent.parent
+
+        locale_dir = root / 'locale'
+
+        try:
+            # Only attempt to create if it doesn't exist to avoid PermissionError on read-only FS
+            if not locale_dir.exists():
+                locale_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.debug(f"Could not create locale directory at {locale_dir}: {e}")
+
+        return locale_dir
+
+    def _get_system_language(self) -> str:
+        """Get system language code"""
+        try:
+            lang = None
+
+            # Check environment variables (common on Unix/macOS)
+            for var in ('LANGUAGE', 'LC_ALL', 'LC_MESSAGES', 'LANG'):
+                lang = os.environ.get(var)
+                if lang:
+                    break
+
+            # Windows Fallback: Use the Windows API via ctypes for reliable detection
+            if not lang and sys.platform == 'win32':
+                try:
+                    import ctypes
+                    # GetUserDefaultUILanguage returns the LCID (e.g., 1031 for de-DE)
+                    lcid = ctypes.windll.kernel32.GetUserDefaultUILanguage()
+                    lang = locale.windows_locale.get(lcid)
+                except Exception:
+                    pass
+
+            # Last Resort: Use getlocale()
+            if not lang:
+                # Note: Might return (None, None) if setlocale() wasn't called
+                lang, _ = locale.getlocale()
+
+            if lang:
+                # locale.normalize converts e.g. "German_Germany" to "de_DE.cp1252"
+                normalized = locale.normalize(lang)
+                # Return first two characters (e.g., 'de')
+                return normalized[:2].lower()
+
+        except Exception as e:
+            # Standard fallback if everything fails
+            logger.debug(f"Failed to detect system language: {e}")
+        
+        return "en"
+
+    def _load_translation(self):
+        """Load translation for current language"""
+        try:
+            self.translation = gettext.translation(
+                self.domain,
+                localedir=str(self.locale_dir),
+                languages=[self.language],
+                fallback=True
+            )
+        except Exception as e:
+            logger.warning(f"Critical failure loading translation for '{self.language}': {e}")
+            # Use NullTranslations as fallback
+            self.translation = gettext.NullTranslations()
+
+    def gettext(self, message: str) -> str:
+        """
+        Translate a message.
+
+        Args:
+            message: Message to translate
+
+        Returns:
+            Translated message
+        """
+        if self.translation:
+            return self.translation.gettext(message)
+        return message
+
+    def ngettext(self, singular: str, plural: str, n: int) -> str:
+        """
+        Translate a message with plural forms.
+
+        Args:
+            singular: Singular form
+            plural: Plural form
+            n: Count
+
+        Returns:
+            Translated message
+        """
+        if self.translation:
+            return self.translation.ngettext(singular, plural, n)
+        return singular if n == 1 else plural
+
+    def get_available_languages(self) -> list[str]:
+        """
+        Get list of available languages by checking for compiled .mo files.
+        """
+        languages = ['en']  # English is default
+        if self.locale_dir.exists():
+            for item in self.locale_dir.iterdir():
+                # Check for structure: locale_dir/{lang}/LC_MESSAGES/{domain}.mo
+                mo_file = item / 'LC_MESSAGES' / f'{self.domain}.mo'
+                if item.is_dir() and mo_file.exists():
+                    languages.append(item.name)
+        return sorted(list(set(languages)))
+
+# Global i18n instance
+_i18n_instance: Optional[I18n] = None
+
+
+def initialize_i18n(domain: str = 'multideck', language: Optional[str] = None) -> I18n:
+    """
+    Initialize global i18n instance.
+
+    Args:
+        domain: The gettext domain (usually the project name)
+        language: Language code or None for system default
+
+    Returns:
+        I18n instance
+    """
+    global _i18n_instance
+    _i18n_instance = I18n(domain, language)
+    return _i18n_instance
+
+
+def get_i18n() -> I18n:
+    """
+    Get global i18n instance.
+
+    Returns:
+        I18n instance
+    """
+    global _i18n_instance
+    if _i18n_instance is None:
+        _i18n_instance = I18n()
+    return _i18n_instance
+
+
+def _(message: str) -> str:
+    """
+    Convenience function for translation.
+
+    Args:
+        message: Message to translate
+
+    Returns:
+        Translated message
+    """
+    return get_i18n().gettext(message)
+

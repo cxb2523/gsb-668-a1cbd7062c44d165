@@ -1,0 +1,436 @@
+"""
+Configuration Manager for MultiDeck Audio Player
+Handles loading and saving configuration files with portable mode support
+"""
+
+import os
+import sys
+import configparser
+import tempfile
+from pathlib import Path
+from typing import Any, Dict
+
+from config.defaults import DEFAULT_CONFIG, VALID_DECK_RANGE
+from audio.recording_scheduler import schedules_from_dict, schedules_to_dict
+from utils.logger import get_logger
+
+# Module logger
+logger = get_logger('config_manager')
+
+
+class ConfigManager:
+    """Manages application configuration with portable mode support"""
+
+    def __init__(self):
+        self.config = configparser.ConfigParser()
+        self.config_path = self._determine_config_path()
+        self._load_config()
+
+    def _determine_config_path(self) -> Path:
+        """
+        Determine configuration file path based on portable mode.
+
+        Portable mode: config.ini in program directory
+        Normal mode: Platform-specific user config directory
+        """
+        # Get program directory
+        if getattr(sys, 'frozen', False):
+            # Running as compiled executable
+            program_dir = Path(sys.executable).parent
+        else:
+            # Running as script
+            program_dir = Path(__file__).parent.parent.parent
+
+        portable_config = program_dir / 'config.ini'
+
+        # Check for portable mode
+        if portable_config.exists():
+            return portable_config
+
+        # Use platform-specific user config directory
+        if sys.platform == 'win32':
+            config_dir = Path(os.environ.get('APPDATA', '~')) / 'MultiDeckAudioPlayer'
+        elif sys.platform == 'darwin':
+            config_dir = Path.home() / 'Library' / 'Application Support' / 'MultiDeckAudioPlayer'
+        else:  # Linux and others
+            config_dir = Path.home() / '.config' / 'multideck-audio-player'
+
+        # Create config directory if it doesn't exist
+        config_dir.mkdir(parents=True, exist_ok=True)
+
+        return config_dir / 'config.ini'
+
+    def _load_config(self):
+        """Load configuration from file or create with defaults"""
+        if self.config_path.exists():
+            try:
+                self.config.read(self.config_path, encoding='utf-8')
+            except Exception as e:
+                logger.error(f"Error loading config: {e}. Using defaults.")
+                self._set_defaults()
+        else:
+            self._set_defaults()
+            self.save()
+
+    def _set_defaults(self):
+        """Set default configuration values"""
+        for section, options in DEFAULT_CONFIG.items():
+            if not self.config.has_section(section):
+                self.config.add_section(section)
+            for key, value in options.items():
+                self.config.set(section, key, str(value))
+
+    def save(self):
+        """Save configuration to file"""
+        try:
+            with open(self.config_path, 'w', encoding='utf-8', newline='\n') as f:
+                self.config.write(f)
+        except Exception as e:
+            logger.error(f"Error saving config: {e}")
+
+    def get(self, section: str, option: str, fallback: Any = None) -> str:
+        """Get configuration value"""
+        return self.config.get(section, option, fallback=fallback)
+
+    def getint(self, section: str, option: str, fallback: int = 0) -> int:
+        """Get configuration value as integer"""
+        return self.config.getint(section, option, fallback=fallback)
+
+    def getfloat(self, section: str, option: str, fallback: float = 0.0) -> float:
+        """Get configuration value as float"""
+        return self.config.getfloat(section, option, fallback=fallback)
+
+    def getboolean(self, section: str, option: str, fallback: bool = False) -> bool:
+        """Get configuration value as boolean"""
+        return self.config.getboolean(section, option, fallback=fallback)
+
+    def get_deck_count(self) -> int:
+        """
+        Get the configured deck count with validation.
+
+        Ensures the value is within allowed range.
+        Values below minimum are set to 1, values above maximum are capped.
+
+        Returns:
+            Validated deck count between 1 and max(VALID_DECK_RANGE)
+        """
+        count = self.getint('General', 'deck_count', 10)
+        min_count = min(VALID_DECK_RANGE)
+        max_count = max(VALID_DECK_RANGE)
+
+        if count < min_count:
+            logger.warning(f"Deck count is too low, using {min_count}")
+            return min_count
+        elif count > max_count:
+            logger.warning(f"Deck count {count} exceeds the maximum deck count, using {max_count}")
+            return max_count
+        return count
+
+    def set(self, section: str, option: str, value: Any):
+        """Set configuration value"""
+        if not self.config.has_section(section):
+            self.config.add_section(section)
+        self.config.set(section, option, str(value))
+
+    def get_all(self, section: str) -> Dict[str, str]:
+        """Get all options in a section as dictionary"""
+        if self.config.has_section(section):
+            return dict(self.config.items(section))
+        return {}
+
+    def get_last_project_file(self) -> str:
+        """Return the remembered project path when restoring is enabled."""
+        if not self.getboolean('General', 'remember_last_project', False):
+            return ''
+        return self.get('General', 'last_project_file', '').strip()
+
+    def remember_project_file(self, filepath: str) -> bool:
+        """Persist a successfully opened project when the option is enabled."""
+        if not filepath or not self.getboolean('General', 'remember_last_project', False):
+            return False
+
+        project_path = str(Path(filepath).expanduser().resolve())
+        self.set('General', 'last_project_file', project_path)
+        self.save()
+        return True
+
+    # Recent Files Management
+
+    def get_recent_files(self) -> list:
+        """
+        Get list of recent files/URLs.
+
+        Returns:
+            List of recent file paths/URLs (most recent first)
+        """
+        recent = []
+        max_items = self.getint('Recent', 'max_recent_items', 10)
+
+        if not self.config.has_section('RecentFiles'):
+            return recent
+
+        for i in range(1, max_items + 1):
+            key = f'file_{i}'
+            if self.config.has_option('RecentFiles', key):
+                path = self.config.get('RecentFiles', key)
+                if path:
+                    recent.append(path)
+
+        return recent
+
+    def add_recent_file(self, filepath: str):
+        """
+        Add a file/URL to the recent files list.
+
+        Args:
+            filepath: Path to file or URL
+        """
+        if not filepath:
+            return
+
+        # Get current list
+        recent = self.get_recent_files()
+
+        # Remove if already in list (to move to top)
+        if filepath in recent:
+            recent.remove(filepath)
+
+        # Add to beginning
+        recent.insert(0, filepath)
+
+        # Limit to max items
+        max_items = self.getint('Recent', 'max_recent_items', 10)
+        recent = recent[:max_items]
+
+        # Save to config
+        self._save_recent_files(recent)
+
+    def remove_recent_file(self, filepath: str):
+        """
+        Remove a file/URL from the recent files list.
+
+        Args:
+            filepath: Path to file or URL to remove
+        """
+        recent = self.get_recent_files()
+        if filepath in recent:
+            recent.remove(filepath)
+            self._save_recent_files(recent)
+
+    def clear_recent_files(self):
+        """Clear all recent files"""
+        if self.config.has_section('RecentFiles'):
+            self.config.remove_section('RecentFiles')
+        self.config.add_section('RecentFiles')
+        self.save()
+
+    def _save_recent_files(self, recent: list):
+        """Save recent files list to config"""
+        # Clear existing
+        if self.config.has_section('RecentFiles'):
+            self.config.remove_section('RecentFiles')
+        self.config.add_section('RecentFiles')
+
+        # Save new list
+        for i, path in enumerate(recent, start=1):
+            self.config.set('RecentFiles', f'file_{i}', path)
+
+        self.save()
+
+
+class ProjectManager:
+    """Manages MultiDeck project files (.mdap)"""
+
+    @staticmethod
+    def _resolve_project_relative_path(value: str, project_dir: Path) -> str:
+        """Resolve local relative paths from a project file against its folder."""
+        if not value or value.startswith(('http://', 'https://')):
+            return value
+
+        path = Path(value).expanduser()
+        if path.is_absolute():
+            return value
+
+        return str((project_dir / path).resolve())
+
+    @staticmethod
+    def _get_project_deck_count(config: configparser.ConfigParser) -> int:
+        """Return the declared deck count, extended by any numbered deck sections."""
+        declared_count = config.getint('General', 'deck_count', fallback=10)
+        deck_numbers = []
+        for section in config.sections():
+            suffix = section.removeprefix('Deck')
+            if section.startswith('Deck') and suffix.isdigit():
+                deck_numbers.append(int(suffix))
+
+        return max([declared_count, *deck_numbers])
+
+    @staticmethod
+    def load_project(filepath: str) -> Dict:
+        """Load project from .mdap file"""
+        config = configparser.ConfigParser()
+        try:
+            project_path = Path(filepath).resolve()
+            project_dir = project_path.parent
+            config.read(project_path, encoding='utf-8')
+            project_data = {}
+
+            # Load mixer settings
+            if config.has_section('Mixer'):
+                project_data['mixer'] = dict(config.items('Mixer'))
+
+            # Load deck settings
+            deck_count = ProjectManager._get_project_deck_count(config)
+            project_data['deck_count'] = deck_count
+            project_data['decks'] = []
+            for i in range(1, deck_count + 1):
+                section = f'Deck{i}'
+                if config.has_section(section):
+                    deck_data = dict(config.items(section))
+                    if 'intro_file' in deck_data:
+                        original_intro_file = deck_data['intro_file']
+                        deck_data['intro_file'] = ProjectManager._resolve_project_relative_path(
+                            deck_data['intro_file'],
+                            project_dir,
+                        )
+                        deck_data['_project_intro_file_original'] = original_intro_file
+                        deck_data['_project_intro_file_resolved'] = deck_data['intro_file']
+                    if deck_data.get('source_type') != 'soundcard_input' and 'file' in deck_data:
+                        original_file = deck_data['file']
+                        deck_data['file'] = ProjectManager._resolve_project_relative_path(
+                            deck_data['file'],
+                            project_dir,
+                        )
+                        deck_data['_project_file_original'] = original_file
+                        deck_data['_project_file_resolved'] = deck_data['file']
+                    # Convert string booleans to actual booleans
+                    if 'mute' in deck_data:
+                        deck_data['mute'] = deck_data['mute'].lower() == 'true'
+                    if 'loop' in deck_data:
+                        deck_data['loop'] = deck_data['loop'].lower() == 'true'
+                    # Convert volume and balance to float
+                    if 'volume' in deck_data:
+                        deck_data['volume'] = float(deck_data['volume'])
+                    if 'balance' in deck_data:
+                        deck_data['balance'] = float(deck_data['balance'])
+                    project_data['decks'].append(deck_data)
+                else:
+                    project_data['decks'].append({})  # Empty deck
+
+            # Load effects settings
+            # raw=True prevents BasicInterpolation from mangling % signs in values
+            # (VST parameter JSON can legitimately contain % characters)
+            # Master effects
+            if config.has_section('MasterEffects'):
+                project_data['master_effects'] = dict(config.items('MasterEffects', raw=True))
+
+            # Per-deck effects
+            project_data['deck_effects'] = []
+            for i in range(1, deck_count + 1):
+                section = f'Deck{i}Effects'
+                if config.has_section(section):
+                    project_data['deck_effects'].append(dict(config.items(section, raw=True)))
+                else:
+                    project_data['deck_effects'].append({})
+
+            project_data['master_schedules'] = schedules_from_dict(
+                dict(config.items('MasterSchedules', raw=True))
+                if config.has_section('MasterSchedules') else {})
+            project_data['deck_schedules'] = [
+                schedules_from_dict(dict(config.items(f'Deck{i}Schedules', raw=True)))
+                if config.has_section(f'Deck{i}Schedules') else []
+                for i in range(1, deck_count + 1)
+            ]
+            return project_data
+        except Exception as e:
+            raise Exception(f"Failed to load project: {e}")
+
+    @staticmethod
+    def save_project(filepath: str, project_data: Dict):
+        """Save project to .mdap file"""
+        config = configparser.ConfigParser(interpolation=None)
+
+        try:
+            # Add header comment
+            config.set('DEFAULT', '; MultiDeck Audio Player Project', '')
+
+            # Save project metadata
+            config.add_section('General')
+            config.set('General', 'deck_count', str(len(project_data.get('decks', []))))
+
+            # Save mixer settings
+            if 'mixer' in project_data:
+                config.add_section('Mixer')
+                for key, value in project_data['mixer'].items():
+                    config.set('Mixer', key, str(value))
+
+            # Save deck settings
+            for i, deck_data in enumerate(project_data.get('decks', []), start=1):
+                if deck_data:  # Only save non-empty decks
+                    section = f'Deck{i}'
+                    config.add_section(section)
+                    for key, value in deck_data.items():
+                        if not key.startswith('_'):
+                            config.set(section, key, str(value))
+                else:
+                    # Add empty deck comment
+                    section = f'Deck{i}'
+                    config.add_section(section)
+                    config.set(section, '; Empty deck', '')
+
+            # Save effects settings
+            # Master effects
+            if 'master_effects' in project_data and project_data['master_effects']:
+                config.add_section('MasterEffects')
+                for key, value in project_data['master_effects'].items():
+                    config.set('MasterEffects', key, str(value))
+
+            # Per-deck effects
+            decks_data = project_data.get('decks', [])
+            for i, fx_data in enumerate(project_data.get('deck_effects', []), start=1):
+                deck_data = decks_data[i - 1] if i <= len(decks_data) else {}
+                if deck_data and fx_data:
+                    section = f'Deck{i}Effects'
+                    config.add_section(section)
+                    for key, value in fx_data.items():
+                        config.set(section, key, str(value))
+
+            schedule_sections = [('MasterSchedules', project_data.get('master_schedules', []))]
+            schedule_sections.extend(
+                (f'Deck{i}Schedules', schedules)
+                for i, schedules in enumerate(project_data.get('deck_schedules', []), 1)
+                if i <= len(decks_data))
+            for section, schedules in schedule_sections:
+                if schedules:
+                    config.add_section(section)
+                    for key, value in schedules_to_dict(schedules).items():
+                        config.set(section, key, value)
+
+            # Write beside the target and replace atomically so a failed save
+            # cannot truncate the user's existing project file.
+            target_path = Path(filepath)
+            temp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode='w',
+                    encoding='utf-8',
+                    newline='\n',
+                    dir=target_path.parent,
+                    prefix=f'.{target_path.name}.',
+                    suffix='.tmp',
+                    delete=False,
+                ) as temp_file:
+                    temp_path = Path(temp_file.name)
+                    config.write(temp_file)
+                    temp_file.flush()
+                    os.fsync(temp_file.fileno())
+                os.replace(temp_path, target_path)
+            except Exception:
+                if temp_path is not None:
+                    try:
+                        temp_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                raise
+        except Exception as e:
+            raise Exception(f"Failed to save project: {e}")

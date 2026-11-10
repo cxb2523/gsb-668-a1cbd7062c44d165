@@ -1,0 +1,382 @@
+"""
+Recorder - Master output recording functionality
+Supports recording formats from config defaults
+Includes pre-roll buffer for retrospective recording
+"""
+
+import wave
+import subprocess
+import threading
+import numpy as np
+from collections import deque
+from pathlib import Path
+from typing import Optional, Callable
+
+from config.defaults import RECORDING_FORMATS
+from utils.logger import get_logger
+from utils.helpers import check_ffmpeg, generate_recording_filename
+
+# Module logger
+logger = get_logger('recorder')
+
+FFMPEG_AVAILABLE = check_ffmpeg()
+
+
+class Recorder:
+    """
+    Records master audio output to audio files.
+    Supports native formats and FFmpeg-backed formats from config defaults.
+    """
+
+    # Supported formats and their FFmpeg codec settings
+    FORMATS = RECORDING_FORMATS
+
+    def __init__(self, sample_rate: int = 44100, channels: int = 2,
+                 bit_depth: int = 16, format: str = 'wav', bitrate: int = 192,
+                 pre_roll_seconds: float = 30.0):
+        """
+        Initialize recorder.
+
+        Args:
+            sample_rate: Sample rate in Hz
+            channels: Number of channels (1=mono, 2=stereo)
+            bit_depth: Bit depth (16, 24, or 32)
+            format: Output format key from RECORDING_FORMATS
+            bitrate: Bitrate in kbps for compressed formats (64-320)
+            pre_roll_seconds: Pre-roll buffer duration in seconds (0 to disable)
+        """
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.bit_depth = bit_depth
+        self.format = format if format in self.FORMATS else 'wav'
+        self.bitrate = max(64, min(320, bitrate))  # Clamp to valid range
+
+        # Recording state
+        self.is_recording = False
+        self.is_paused = False
+        self.output_file: Optional[str] = None
+        self.wave_file: Optional[wave.Wave_write] = None
+        self._ffmpeg_process: Optional[subprocess.Popen] = None
+
+        # Pre-roll buffer for retrospective recording
+        self._pre_roll_seconds = max(0.0, min(120.0, pre_roll_seconds))  # 0-120 seconds
+        self._pre_roll_buffer: deque = deque()
+        self._pre_roll_frames_count = 0  # Track total frames in buffer
+
+        # Statistics
+        self.frames_recorded = 0
+
+        # Threading
+        self._lock = threading.RLock()
+
+        # Callbacks
+        self.on_recording_started: Optional[Callable] = None
+        self.on_recording_stopped: Optional[Callable] = None
+        self.on_error: Optional[Callable] = None
+
+    def set_format(self, format: str):
+        """
+        Set recording format.
+
+        Args:
+            format: Output format key from RECORDING_FORMATS
+        """
+        if not self.is_recording:
+            self.format = format if format in self.FORMATS else 'wav'
+
+    def set_bitrate(self, bitrate: int):
+        """
+        Set bitrate for compressed formats.
+
+        Args:
+            bitrate: Bitrate in kbps (64-320)
+        """
+        if not self.is_recording:
+            self.bitrate = max(64, min(320, bitrate))
+
+    def set_pre_roll_seconds(self, seconds: float):
+        """
+        Set pre-roll buffer duration.
+
+        Args:
+            seconds: Pre-roll duration in seconds (0-120, 0 to disable)
+        """
+        with self._lock:
+            self._pre_roll_seconds = max(0.0, min(120.0, seconds))
+            # Clear buffer if pre-roll is disabled
+            if self._pre_roll_seconds == 0:
+                self._pre_roll_buffer.clear()
+                self._pre_roll_frames_count = 0
+
+    def buffer_frames(self, audio_data: np.ndarray):
+        """
+        Buffer audio frames for pre-roll (always active, even when not recording).
+        Call this method continuously with audio output data.
+
+        Args:
+            audio_data: Audio data (samples, channels) as numpy array
+        """
+        try:
+            with self._lock:
+                if self._pre_roll_seconds <= 0:
+                    return
+                if self.is_recording:
+                    # Don't buffer while recording (frames go directly to file)
+                    return
+
+                # Add new chunk to buffer (make a copy to avoid reference issues)
+                chunk_frames = len(audio_data)
+                self._pre_roll_buffer.append(audio_data.copy())
+                self._pre_roll_frames_count += chunk_frames
+
+                # Remove old chunks if buffer exceeds max size
+                max_frames = int(self.sample_rate * self._pre_roll_seconds)
+                while self._pre_roll_frames_count > max_frames and self._pre_roll_buffer:
+                    removed = self._pre_roll_buffer.popleft()
+                    self._pre_roll_frames_count -= len(removed)
+
+        except Exception as e:
+            logger.error(f"Error buffering frames: {e}")
+
+    def _write_pre_roll_buffer(self):
+        """Write buffered pre-roll data to the recording file."""
+        if not self._pre_roll_buffer:
+            return
+
+        try:
+            for chunk in self._pre_roll_buffer:
+                self._write_chunk_internal(chunk)
+                self.frames_recorded += len(chunk)
+
+            # Clear buffer after writing
+            self._pre_roll_buffer.clear()
+            self._pre_roll_frames_count = 0
+
+        except Exception as e:
+            logger.error(f"Error writing pre-roll buffer: {e}")
+
+    def _write_chunk_internal(self, audio_data: np.ndarray):
+        """
+        Internal method to write a chunk of audio data to file.
+
+        Args:
+            audio_data: Audio data to write
+        """
+        # Clip before integer conversion; converting out-of-range floats first
+        # can wrap around and produce severe distortion.
+        clipped_audio = np.clip(audio_data, -1.0, 1.0)
+        audio_int = (clipped_audio * 32767).astype(np.int16)
+        audio_bytes = audio_int.tobytes()
+
+        if self.wave_file:
+            # Native WAV recording
+            if self.bit_depth == 16:
+                self.wave_file.writeframes(audio_bytes)
+            elif self.bit_depth == 24:
+                # wave expects packed 24-bit PCM: exactly three little-endian
+                # bytes per sample, not four-byte int32 values.
+                audio_int32 = (clipped_audio * 8388607).astype(np.int32).reshape(-1)
+                packed = np.empty(audio_int32.size * 3, dtype=np.uint8)
+                packed[0::3] = audio_int32 & 0xFF
+                packed[1::3] = (audio_int32 >> 8) & 0xFF
+                packed[2::3] = (audio_int32 >> 16) & 0xFF
+                self.wave_file.writeframes(packed.tobytes())
+            elif self.bit_depth == 32:
+                audio_int32 = (clipped_audio * 2147483647).astype(np.int32)
+                self.wave_file.writeframes(audio_int32.tobytes())
+
+        elif self._ffmpeg_process and self._ffmpeg_process.stdin:
+            # FFmpeg recording - always use 16-bit for FFmpeg input
+            self._ffmpeg_process.stdin.write(audio_bytes)
+
+    def start_recording(self, output_file: Optional[str] = None,
+                       output_directory: Optional[str] = None) -> bool:
+        """
+        Start recording.
+
+        Args:
+            output_file: Output file path (optional, will generate if not provided)
+            output_directory: Output directory (optional, uses current dir if not provided)
+
+        Returns:
+            True if recording started successfully
+        """
+        if self.is_recording:
+            return False
+
+        # Check if format requires FFmpeg
+        format_info = self.FORMATS.get(self.format, self.FORMATS['wav'])
+        if not format_info['native'] and not FFMPEG_AVAILABLE:
+            logger.info("FFmpeg not available, falling back to WAV format")
+            self.format = 'wav'
+            format_info = self.FORMATS['wav']
+
+        try:
+            with self._lock:
+                # Generate filename if not provided
+                extension = format_info['extension'].lstrip('.')
+                if not output_file:
+                    filename = generate_recording_filename(extension, 'recording')
+                    if output_directory:
+                        output_file = str(Path(output_directory) / filename)
+                    else:
+                        output_file = filename
+                else:
+                    # Ensure correct extension
+                    output_path = Path(output_file)
+                    if output_path.suffix.lower() != format_info['extension']:
+                        output_file = str(output_path.with_suffix(format_info['extension']))
+
+                # Ensure parent directory exists
+                output_path = Path(output_file)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+
+                self.output_file = str(output_file)
+
+                if format_info['native']:
+                    # Use native WAV writing
+                    self._start_wav_recording()
+                else:
+                    # Use FFmpeg for encoding
+                    self._start_ffmpeg_recording(format_info)
+
+                self.is_recording = True
+                self.is_paused = False
+                self.frames_recorded = 0
+
+                # Write pre-roll buffer first (retrospective recording)
+                self._write_pre_roll_buffer()
+
+                if self.on_recording_started:
+                    self.on_recording_started(self.output_file)
+
+                return True
+
+        except Exception as e:
+            logger.error(f"Error starting recording: {e}")
+            if self.on_error:
+                self.on_error(f"Failed to start recording: {e}")
+            return False
+
+    def _start_wav_recording(self):
+        """Start native WAV recording"""
+        self.wave_file = wave.open(self.output_file, 'wb')
+        self.wave_file.setnchannels(self.channels)
+        self.wave_file.setsampwidth(self.bit_depth // 8)
+        self.wave_file.setframerate(self.sample_rate)
+
+    def _start_ffmpeg_recording(self, format_info: dict):
+        """Start FFmpeg-based recording"""
+        codec = format_info['codec']
+
+        # Build FFmpeg command
+        cmd = [
+            'ffmpeg',
+            '-y',  # Overwrite output
+            '-f', 's16le',  # Input format: signed 16-bit little-endian
+            '-ar', str(self.sample_rate),  # Sample rate
+            '-ac', str(self.channels),  # Channels
+            '-i', 'pipe:0',  # Read from stdin
+            '-acodec', codec,
+        ]
+
+        # Add format-specific options
+        if format_info.get('uses_bitrate', False):
+            cmd.extend(['-b:a', f'{self.bitrate}k'])
+        cmd.extend(format_info.get('ffmpeg_options', []))
+
+        cmd.append(self.output_file)
+
+        # Start FFmpeg process
+        creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+        self._ffmpeg_process = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags
+        )
+
+    def stop_recording(self) -> bool:
+        """
+        Stop recording.
+
+        Returns:
+            True if recording stopped successfully
+        """
+        if not self.is_recording:
+            return False
+
+        try:
+            with self._lock:
+                if self.wave_file:
+                    self.wave_file.close()
+                    self.wave_file = None
+
+                if self._ffmpeg_process:
+                    try:
+                        self._ffmpeg_process.stdin.close()
+                        self._ffmpeg_process.wait(timeout=10)
+                    except Exception as e:
+                        logger.error(f"Error closing FFmpeg: {e}")
+                        self._ffmpeg_process.kill()
+                    self._ffmpeg_process = None
+
+                self.is_recording = False
+                self.is_paused = False
+                output_file = self.output_file
+                self.output_file = None
+
+                if self.on_recording_stopped:
+                    self.on_recording_stopped(output_file, self.frames_recorded)
+
+                return True
+
+        except Exception as e:
+            logger.error(f"Error stopping recording: {e}")
+            if self.on_error:
+                self.on_error(f"Failed to stop recording: {e}")
+            return False
+
+    def pause_recording(self):
+        """Pause writing while keeping the current file open."""
+        with self._lock:
+            if self.is_recording:
+                self.is_paused = True
+
+    def resume_recording(self):
+        """Resume the current file without adding paused audio or pre-roll."""
+        with self._lock:
+            if self.is_recording:
+                self.is_paused = False
+
+    def write_frames(self, audio_data: np.ndarray):
+        """
+        Write audio frames to recording.
+
+        Args:
+            audio_data: Audio data (samples, channels) as numpy array
+        """
+        if not self.is_recording:
+            return
+
+        try:
+            with self._lock:
+                if not self.is_recording or self.is_paused:
+                    return
+                try:
+                    self._write_chunk_internal(audio_data)
+                    self.frames_recorded += len(audio_data)
+                except BrokenPipeError:
+                    logger.error("FFmpeg pipe broken, stopping recording")
+                    self.is_recording = False
+
+        except Exception as e:
+            logger.error(f"Error writing frames: {e}")
+            if self.on_error:
+                self.on_error(f"Error during recording: {e}")
+
+    def __del__(self):
+        """Cleanup on deletion"""
+        if self.is_recording:
+            self.stop_recording()

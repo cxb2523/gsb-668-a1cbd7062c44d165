@@ -1,0 +1,162 @@
+# MultiDeck Audio Player
+
+An accessible, cross-platform audio player that enables simultaneous playback of multiple audio files or internet streams. MultiDeck is perfect for users who need to monitor multiple audio sources in parallel or create complex soundscapes.
+
+[![Main window, german interface shown](./multideck-screenshot.png)](./multideck-screenshot.png)
+
+## Features
+
+- **Create multiple independent Audio Decks**
+  - Load local audio files (MP3, OGG, WAV, FLAC)
+  - Stream from internet sources (Icecast/Shoutcast)
+  - Monitor sound card inputs (microphone, line)
+  - Individual play/pause, volume, balance, mute, and loop controls
+  - Global play/pause control for all decks
+  - Custom deck labels
+  - Separate output device for each deck (multiroom mode only)
+- **Four Operating Modes**
+  - **Mixer Mode**: All decks play simultaneously with overlap
+  - **Solo Mode**: Only one deck audible at a time
+  - **Automatic Mode**: Automatic switching between decks, supports crossfade
+  - **Multiroom mode**: Mixer mode with separate output devices for each deck
+- **Project Management**
+  - Save and load complete deck configurations (.mdap files)
+  - Import/export M3U files
+- **Master Output Recorder**
+  - Record combined audio output to WAV, mp3, ogg or flac files
+  - Real-time recording with status display and optional pre-roll buffer
+- **Live audio effects powered by Spotify's Pedalboard library**
+  - Use standard effects such as delay, chorus, equalizer, compressor and limiter
+  - Load and configure VST3 effect plugins
+  - Apply effects per deck or to the master output.
+- **Commandline interface**
+  - Load project files and play them in your server environment or on embedded computers.
+  - Optional silent mode for usage in scripts.
+
+## Installation
+
+### Prerequisites
+
+- Python 3.10 or higher (compatible with Python 3.15+)
+- FFmpeg (for MP3 support and internet streaming)
+
+#### Installing FFmpeg
+
+**Windows (winget):**
+```
+winget install Gyan.FFmpeg
+```
+
+**Windows (manual):**
+1. Download from e.g. https://www.gyan.dev/ffmpeg/builds/ (ffmpeg-release-essentials.zip)
+2. Extract the archive
+3. Add the `bin` folder to your system PATH
+
+**Linux (Ubuntu/Debian):**
+```bash
+sudo apt update
+sudo apt install ffmpeg
+```
+
+**Linux (Fedora):**
+```bash
+sudo dnf install ffmpeg
+```
+
+**macOS:**
+```bash
+brew install ffmpeg
+```
+
+### Setup
+
+1. Clone the repository:
+```bash
+git clone https://github.com/schulle4u/multideck.git
+cd multideck
+```
+
+2. Create and activate a virtual environment:
+```bash
+# Windows
+python -m venv venv
+venv\Scripts\activate
+
+# Linux/macOS
+python3 -m venv venv
+source venv/bin/activate
+```
+
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+4. (Optional) Install in development mode:
+```bash
+pip install -e .
+```
+
+## Usage
+
+### Running the Application
+
+```bash
+python src/main.py
+```
+
+### Configuration
+
+Copy `config.ini.example` to `config.ini` and adjust settings as needed:
+
+```bash
+cp config.ini.example config.ini
+```
+
+For portable mode, place `config.ini` in the program directory. Otherwise, configuration will be stored in platform-specific locations.
+
+### Keyboard Shortcuts
+
+See `docs` folder for complete keyboard reference.
+
+## Project Structure
+
+```
+src/
+├── main.py                    # Entry point
+├── cli.py                     # Command line interface
+├── gui/                       # User interface components
+├── audio/                     # Audio engine and deck logic
+├── config/                    # Configuration management
+└── utils/                     # Utilities and i18n
+
+locale/                        # Translations
+docs/                          # Documentation
+tools/                         # Development helpers
+```
+
+## Requirements
+
+- Python 3.10+ (compatible with Python 3.15+)
+- wxPython 4.3.2+
+- [M45wxControls](https://github.com/schulle4u/m45wxcontrols)
+- sounddevice 0.5.6+
+- soundfile 0.14.0+
+- numpy 2.5.4+
+- FFmpeg (external tool, must be in PATH)
+
+## License
+
+MIT License - See LICENSE file for details
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit pull requests or open issues for bugs and feature requests.
+
+## Accessibility
+
+MultiDeck Audio Player is designed with accessibility as a core principle. All features are fully accessible via keyboard and screen readers. If you encounter any accessibility issues, please report them in the issue tracker.
+
+## Support
+
+For bug reports and feature requests, please use the [GitHub issue tracker](https://github.com/schulle4u/multideck/issues)

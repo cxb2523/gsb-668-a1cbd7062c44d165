@@ -1,0 +1,1429 @@
+"""
+Mixer - Manages multiple decks and operating modes
+"""
+
+import numpy as np
+import threading
+import time
+from pathlib import Path
+from typing import List, Optional, Callable
+
+from audio.deck import Deck
+from audio.audio_engine import AudioEngine
+from audio.recorder import Recorder
+from audio.effects import EffectChain
+from config.defaults import MODE_MIXER, MODE_SOLO, MODE_AUTOMATIC, MODE_MULTIROOM
+from utils.logger import get_logger
+from utils.helpers import generate_recording_filename, sanitize_filename
+
+# Module logger
+logger = get_logger('mixer')
+
+
+class Mixer:
+    """
+    Manages multiple audio decks and mixing modes.
+    Supports three operating modes: Mixer, Solo, and Automatic.
+    """
+
+    def __init__(self, audio_engine: AudioEngine, num_decks: int = 10, recorder=None, streamer=None):
+        """
+        Initialize mixer.
+
+        Args:
+            audio_engine: AudioEngine instance
+            num_decks: Number of decks (2, 4, 6, 8, or 10)
+            recorder: Optional Recorder instance for master output recording
+            streamer: Optional livestreamer instance for master output streaming
+        """
+        self.audio_engine = audio_engine
+        self._decks_lock = threading.RLock()
+        self._next_deck_id = 1
+        self.recorder = recorder
+        self.streamer = streamer
+
+        # Create decks with per-deck effect chains
+        self.decks: List[Deck] = []
+        for index in range(num_decks):
+            self.decks.append(self._new_deck(index + 1))
+
+        # Master effect chain
+        self.master_effects = EffectChain(audio_engine.sample_rate)
+
+        # Mixer settings
+        self.master_volume = 0.8
+        self.mode = MODE_MIXER
+        self.active_deck_index = 0  # For Solo and Automatic modes
+
+        # Automatic mode settings
+        self.auto_switch_interval = 10  # seconds
+        self.auto_switch_enabled = False
+        self._auto_thread: Optional[threading.Thread] = None
+        self._auto_stop_event = threading.Event()
+        self._multiroom_thread: Optional[threading.Thread] = None
+        self._multiroom_stop_event = threading.Event()
+        self._multiroom_workers: dict = {}
+        self._multiroom_worker_devices: set = set()
+        self._multiroom_target_blocks = 6
+        self._multiroom_refill_threshold = 3
+
+        # Crossfade settings
+        self.crossfade_enabled = True
+        self.crossfade_duration = 2.0  # seconds
+
+        # Level-based switching settings
+        self.level_switch_enabled = False
+        self.level_threshold_db = -30.0
+        self.level_hysteresis_db = 3.0
+        self.level_hold_time = 3.0
+        self._level_hold_until = 0.0  # Timestamp until level-switches are blocked
+
+        # Crossfade state
+        self._crossfade_active = False
+        self._crossfade_from_deck = 0
+        self._crossfade_to_deck = 0
+        self._crossfade_samples_total = 0
+        self._crossfade_samples_done = 0
+
+        # Audio processing
+        self._lock = threading.Lock()
+        self._loaded_audio_cache = {}  # deck_id -> audio_data
+        self._loaded_audio_cache_generations = {}  # deck_id -> source generation
+        self._switch_intro_cache = {}  # intro_file -> audio_data
+        self._switch_intro_audio = None
+        self._switch_intro_position = 0
+
+        # Underflow warning rate limiting
+        self._last_underflow_time = 0
+        self._underflow_count = 0
+
+        # Per-deck recorders
+        self.deck_recorders: dict = {}  # deck_id -> Recorder
+        self._recorder_config: dict = {}  # Shared config for creating deck recorders
+
+        # Callbacks
+        self.on_mode_change: Optional[Callable] = None
+        self.on_active_deck_change: Optional[Callable] = None
+        self.on_deck_recording_started: Optional[Callable] = None
+        self.on_deck_recording_stopped: Optional[Callable] = None
+        self.on_routing_error: Optional[Callable] = None
+
+        # TTS manager for automatic-mode deck-switch announcements (injected by main_frame)
+        self.tts_manager = None
+
+        # Start audio stream
+        self._apply_output_mode()
+
+    @property
+    def num_decks(self) -> int:
+        """Return the current number of decks."""
+        with self._decks_lock:
+            return len(self.decks)
+
+    def _new_deck(self, name_number: Optional[int] = None) -> Deck:
+        """Create a deck with a stable runtime identity and effect chain."""
+        deck_id = self._next_deck_id
+        self._next_deck_id += 1
+        deck = Deck(deck_id, self.audio_engine.sample_rate, self.audio_engine.buffer_size)
+        if name_number is None:
+            name_number = len(self.decks) + 1
+            existing_names = {existing.name for existing in self.decks}
+            while f"Deck {name_number}" in existing_names:
+                name_number += 1
+        deck.name = f"Deck {name_number}"
+        deck.effects = EffectChain(self.audio_engine.sample_rate)
+        return deck
+
+    def deck_snapshot(self) -> List[Deck]:
+        """Return a stable snapshot for GUI and audio-thread iteration."""
+        with self._decks_lock:
+            return list(self.decks)
+
+    def index_of_deck(self, deck_id: int) -> int:
+        """Return the current list position of a stable deck ID."""
+        with self._decks_lock:
+            for index, deck in enumerate(self.decks):
+                if deck.deck_id == deck_id:
+                    return index
+        return -1
+
+    def create_deck(self, index: Optional[int] = None) -> Deck:
+        """Create and insert a deck at *index*, or append it."""
+        with self._decks_lock:
+            insert_at = len(self.decks) if index is None else max(0, min(index, len(self.decks)))
+            active_deck = self.get_deck(self.active_deck_index)
+            deck = self._new_deck()
+            self.decks.insert(insert_at, deck)
+            if self._crossfade_active:
+                self._crossfade_active = False
+            if active_deck is not None:
+                self.active_deck_index = self.decks.index(active_deck)
+            elif len(self.decks) == 1:
+                self.active_deck_index = 0
+            return deck
+
+    def remove_deck(self, deck_id: int, restart_routing: bool = True) -> Optional[Deck]:
+        """Stop, detach and remove a deck identified by its stable ID."""
+        with self._decks_lock:
+            index = self.index_of_deck(deck_id)
+            if index < 0:
+                return None
+            deck = self.decks[index]
+            active_deck = self.get_deck(self.active_deck_index)
+
+            self.stop_deck_recording(deck_id)
+            deck.unload()
+            self.clear_deck_cache(deck_id)
+            if self._crossfade_active:
+                self._crossfade_active = False
+
+            self.decks.pop(index)
+            if not self.decks:
+                self.active_deck_index = 0
+            elif active_deck is deck:
+                self.active_deck_index = min(index, len(self.decks) - 1)
+            elif active_deck in self.decks:
+                self.active_deck_index = self.decks.index(active_deck)
+            else:
+                self.active_deck_index = min(self.active_deck_index, len(self.decks) - 1)
+
+        if restart_routing:
+            self.restart_multiroom_routing()
+        return deck
+
+    def move_deck(self, deck_id: int, target_index: int) -> bool:
+        """Move a deck while preserving its identity and active status."""
+        with self._decks_lock:
+            source_index = self.index_of_deck(deck_id)
+            if source_index < 0 or not self.decks:
+                return False
+            target_index = max(0, min(target_index, len(self.decks) - 1))
+            if source_index == target_index:
+                return False
+            active_deck = self.get_deck(self.active_deck_index)
+            deck = self.decks.pop(source_index)
+            self.decks.insert(target_index, deck)
+            if active_deck in self.decks:
+                self.active_deck_index = self.decks.index(active_deck)
+            if self._crossfade_active:
+                self._crossfade_active = False
+            return True
+
+    def replace_decks(self, count: int) -> None:
+        """Replace the collection with *count* new empty decks."""
+        count = max(0, int(count))
+        for deck in self.deck_snapshot():
+            self.remove_deck(deck.deck_id, restart_routing=False)
+        with self._decks_lock:
+            self.decks = [self._new_deck(index + 1) for index in range(count)]
+            self.active_deck_index = 0
+        self.restart_multiroom_routing()
+
+    def _start_playback(self):
+        """Start audio output stream with callback"""
+        self.audio_engine.start_stream(self._audio_callback)
+
+    def _stop_global_playback(self):
+        """Stop the shared master output stream."""
+        self.audio_engine.stop_stream()
+
+    def _apply_output_mode(self):
+        """Start/stop physical outputs according to the active mode."""
+        if self.mode == MODE_MULTIROOM:
+            if self.audio_engine.is_null_output_device():
+                self._stop_multiroom_playback()
+                if not self.audio_engine.is_running():
+                    self._start_playback()
+                self._emit_routing_warning(
+                    "Multiroom mode is running without physical outputs; only the virtual master bus remains available."
+                )
+                return
+            self._stop_global_playback()
+            self._start_multiroom_playback()
+        else:
+            self._stop_multiroom_playback()
+            if not self.audio_engine.is_running():
+                self._start_playback()
+
+    def _emit_routing_warning(self, message: str):
+        logger.warning(message)
+        if self.on_routing_error:
+            try:
+                self.on_routing_error(message)
+            except Exception as exc:
+                logger.error(f"Error in routing warning callback: {exc}")
+
+    def _normalize_device_key(self, device) -> str:
+        return 'default' if device is None else str(device)
+
+    def _resolve_output_device_for_deck(self, deck: Deck, warn: bool = True):
+        """
+        Resolve the actual output device for a deck, falling back to the global
+        device if the stored per-deck device is invalid.
+        """
+        if deck.output_device_id is None:
+            return self.audio_engine.device
+
+        validated = self.audio_engine._validate_device(deck.output_device_id)
+        if validated is None and self.audio_engine.device != deck.output_device_id:
+            if warn:
+                self._emit_routing_warning(
+                    f"Deck {deck.deck_id} output device '{deck.output_device_name}' unavailable; falling back to global output"
+                )
+            return self.audio_engine.device
+
+        return validated
+
+    def _ensure_multiroom_workers(self):
+        """Create workers for all devices currently needed in multiroom mode."""
+        required_devices = set()
+        for deck in self.deck_snapshot():
+            if deck.file_path:
+                required_devices.add(self._normalize_device_key(self._resolve_output_device_for_deck(deck)))
+
+        # Remove workers no longer needed
+        for key in list(self._multiroom_workers.keys()):
+            if key not in required_devices:
+                self._multiroom_workers[key].stop()
+                del self._multiroom_workers[key]
+
+        # Create missing workers
+        for deck in self.deck_snapshot():
+            if not deck.file_path:
+                continue
+            resolved_device = self._resolve_output_device_for_deck(deck)
+            key = self._normalize_device_key(resolved_device)
+            if key in self._multiroom_workers:
+                continue
+            try:
+                worker = self.audio_engine.create_output_worker(resolved_device)
+                worker.start()
+                self._multiroom_workers[key] = worker
+            except Exception as exc:
+                self._emit_routing_warning(
+                    f"Failed to open output device for Deck {deck.deck_id} ({deck.name}): {exc}"
+                )
+                fallback_key = self._normalize_device_key(self.audio_engine.device)
+                if key != fallback_key and fallback_key not in self._multiroom_workers:
+                    fallback_worker = self.audio_engine.create_output_worker(self.audio_engine.device)
+                    fallback_worker.start()
+                    self._multiroom_workers[fallback_key] = fallback_worker
+
+    def _start_multiroom_playback(self):
+        """Start per-device output workers and the shared multiroom render loop."""
+        if self._multiroom_thread is not None and self._multiroom_thread.is_alive():
+            return
+        self._ensure_multiroom_workers()
+        self._multiroom_stop_event.clear()
+        self._multiroom_thread = threading.Thread(target=self._multiroom_loop, daemon=True)
+        self._multiroom_thread.start()
+
+    def _stop_multiroom_playback(self):
+        """Stop multiroom render loop and all per-device workers."""
+        if self._multiroom_thread is not None:
+            self._multiroom_stop_event.set()
+            self._multiroom_thread.join(timeout=1.0)
+            self._multiroom_thread = None
+        for worker in self._multiroom_workers.values():
+            worker.stop()
+        self._multiroom_workers.clear()
+
+    def restart_multiroom_routing(self):
+        """Rebuild multiroom workers after routing/device changes."""
+        if self.mode != MODE_MULTIROOM:
+            return
+        self._stop_multiroom_playback()
+        self._start_multiroom_playback()
+
+    def set_deck_output_device(self, deck_id: int, device_id=None, device_name: Optional[str] = None) -> bool:
+        """Update a deck's preferred output device and hot-apply it if needed."""
+        deck = self.get_deck_by_id(deck_id)
+        if not deck:
+            return False
+        deck.set_output_device(device_id, device_name)
+        if self.mode == MODE_MULTIROOM:
+            self.restart_multiroom_routing()
+        return True
+
+    def _handle_virtual_master_output(self, audio_data: np.ndarray):
+        """
+        Feed the virtual sum bus used in multiroom mode for master effects and recording.
+        """
+        audio_data = audio_data * self.master_volume
+        audio_data = self.master_effects.process(audio_data)
+        self._handle_master_capture_output(audio_data)
+
+    def _handle_master_capture_output(self, audio_data: np.ndarray):
+        """Feed master-output consumers such as recorder and livestreamer."""
+        if self.recorder:
+            try:
+                if self.recorder.is_recording:
+                    self.recorder.write_frames(audio_data)
+                else:
+                    self.recorder.buffer_frames(audio_data)
+            except Exception as rec_error:
+                logger.error(f"Error with recorder: {rec_error}")
+
+        if self.streamer:
+            try:
+                self.streamer.write_frames(audio_data)
+            except Exception as stream_error:
+                logger.error(f"Error with livestreamer: {stream_error}")
+
+    def _render_multiroom_block(self, frames: int) -> tuple[dict, np.ndarray]:
+        """
+        Render one shared multiroom block for all deck routes plus the virtual master sum.
+        """
+        route_streams = {}
+        virtual_streams = []
+
+        for deck in self.deck_snapshot():
+            if deck.is_playing:
+                audio = self._get_deck_audio(deck, frames)
+                if audio is None:
+                    audio = self.audio_engine.create_silence(frames)
+                self._feed_deck_recorder(deck.deck_id, audio)
+                virtual_streams.append(audio)
+
+                resolved_device = self._resolve_output_device_for_deck(deck, warn=False)
+                key = self._normalize_device_key(resolved_device)
+                route_streams.setdefault(key, []).append(audio)
+            else:
+                self._decay_deck_rms(deck)
+
+        virtual_sum = (
+            self.audio_engine.mix_audio(virtual_streams)
+            if virtual_streams else
+            self.audio_engine.create_silence(frames)
+        )
+        return route_streams, virtual_sum
+
+    def _multiroom_loop(self):
+        """
+        Render deck audio centrally and distribute it to per-device workers.
+        """
+        frames = self.audio_engine.buffer_size
+
+        while not self._multiroom_stop_event.is_set():
+            self._ensure_multiroom_workers()
+
+            if not self._multiroom_workers:
+                if self._multiroom_stop_event.wait(0.05):
+                    break
+                continue
+
+            min_queued_blocks = min(
+                worker.get_queued_blocks() for worker in self._multiroom_workers.values()
+            )
+
+            if min_queued_blocks <= self._multiroom_refill_threshold:
+                while min_queued_blocks < self._multiroom_target_blocks and not self._multiroom_stop_event.is_set():
+                    route_streams, virtual_sum = self._render_multiroom_block(frames)
+
+                    for key, worker in self._multiroom_workers.items():
+                        streams = route_streams.get(key)
+                        if streams:
+                            worker.submit(self.audio_engine.mix_audio(streams))
+                        else:
+                            worker.submit(self.audio_engine.create_silence(frames))
+
+                    self._handle_virtual_master_output(virtual_sum)
+                    min_queued_blocks = min(
+                        worker.get_queued_blocks() for worker in self._multiroom_workers.values()
+                    )
+            if self._multiroom_stop_event.wait(0.005):
+                break
+
+    def _audio_callback(self, outdata, frames, time_info, status):
+        """
+        Audio callback for sounddevice.
+        Called by audio thread to fill output buffer.
+        """
+        if status:
+            # Rate-limit underflow warnings (max once per second)
+            current_time = time.time()
+            if current_time - self._last_underflow_time >= 1.0:
+                if self._underflow_count > 0:
+                    logger.warning(f"Audio callback status: {status} (occurred {self._underflow_count + 1}x)")
+                else:
+                    logger.warning(f"Audio callback status: {status}")
+                self._last_underflow_time = current_time
+                self._underflow_count = 0
+            else:
+                self._underflow_count += 1
+
+        try:
+            # Generate audio for current mode
+            audio_data = self._generate_audio(frames)
+
+            # Apply master volume
+            audio_data *= self.master_volume
+
+            # Apply master effects
+            audio_data = self.master_effects.process(audio_data)
+
+            self._handle_master_capture_output(audio_data)
+
+            # Copy to output buffer
+            outdata[:] = audio_data
+
+        except Exception as e:
+            logger.error(f"Error in audio callback: {e}")
+            outdata.fill(0)
+
+    def _generate_audio(self, frames: int) -> np.ndarray:
+        """
+        Generate audio based on current operating mode.
+
+        Args:
+            frames: Number of frames to generate
+
+        Returns:
+            Audio data (frames, 2)
+        """
+        if self.mode == MODE_MIXER:
+            return self._generate_mixer_mode(frames)
+        elif self.mode == MODE_SOLO:
+            return self._mix_switch_intro(self._generate_solo_mode(frames), frames)
+        elif self.mode == MODE_AUTOMATIC:
+            return self._generate_automatic_mode(frames)
+        elif self.mode == MODE_MULTIROOM:
+            if self.audio_engine.is_null_output_device():
+                _, virtual_sum = self._render_multiroom_block(frames)
+                return virtual_sum
+            return self.audio_engine.create_silence(frames)
+        else:
+            return self.audio_engine.create_silence(frames)
+
+    def _generate_mixer_mode(self, frames: int) -> np.ndarray:
+        """Generate audio for Mixer mode (all decks mix together)"""
+        audio_streams = []
+
+        for deck in self.deck_snapshot():
+            if deck.is_playing:
+                audio = self._get_deck_audio(deck, frames)
+                if audio is not None:
+                    self._feed_deck_recorder(deck.deck_id, audio)
+                    audio_streams.append(audio)
+
+        if audio_streams:
+            return self.audio_engine.mix_audio(audio_streams)
+        else:
+            return self.audio_engine.create_silence(frames)
+
+    def _generate_solo_mode(self, frames: int) -> np.ndarray:
+        """Generate audio for Solo mode (only active deck plays)"""
+        handled_deck_ids = set()
+        result = self.audio_engine.create_silence(frames)
+
+        with self._decks_lock:
+            decks = list(self.decks)
+            active_deck_index = self.active_deck_index
+        if 0 <= active_deck_index < len(decks):
+            deck = decks[active_deck_index]
+            if deck.is_playing:
+                audio = self._get_deck_audio(deck, frames)
+                if audio is not None:
+                    self._feed_deck_recorder(deck.deck_id, audio)
+                    result = audio
+                handled_deck_ids.add(deck.deck_id)
+
+        # Advance every non-audible deck so switching decks does not resume from
+        # a stale position. Their audio is rendered for state/recording purposes
+        # but deliberately left out of the audible solo mix.
+        self._advance_non_audible_decks(frames, handled_deck_ids)
+
+        return result
+
+    def _generate_automatic_mode(self, frames: int) -> np.ndarray:
+        """Generate audio for Automatic mode (solo with auto-switching and crossfade)"""
+        # If crossfade is active, mix both decks with fading volumes
+        if self._crossfade_active:
+            base_audio = self._generate_crossfade_audio(frames)
+        else:
+            # Otherwise, same as solo mode
+            base_audio = self._generate_solo_mode(frames)
+
+        return self._mix_switch_intro(base_audio, frames)
+
+    def _generate_crossfade_audio(self, frames: int) -> np.ndarray:
+        """Generate audio during crossfade transition"""
+        # Calculate fade progress for this frame block
+        fade_start = self._crossfade_samples_done / self._crossfade_samples_total
+        self._crossfade_samples_done += frames
+        fade_end = min(1.0, self._crossfade_samples_done / self._crossfade_samples_total)
+
+        # Get audio from both decks
+        with self._decks_lock:
+            decks = list(self.decks)
+            from_index = self._crossfade_from_deck
+            to_index = self._crossfade_to_deck
+        from_deck = decks[from_index] if 0 <= from_index < len(decks) else None
+        to_deck = decks[to_index] if 0 <= to_index < len(decks) else None
+
+        from_audio = None
+        to_audio = None
+
+        handled_deck_ids = set()
+
+        if from_deck and from_deck.is_playing:
+            from_audio = self._get_deck_audio(from_deck, frames)
+            if from_audio is not None:
+                self._feed_deck_recorder(from_deck.deck_id, from_audio)
+            handled_deck_ids.add(from_deck.deck_id)
+        if to_deck and to_deck.is_playing:
+            to_audio = self._get_deck_audio(to_deck, frames)
+            if to_audio is not None:
+                self._feed_deck_recorder(to_deck.deck_id, to_audio)
+            handled_deck_ids.add(to_deck.deck_id)
+
+        # Keep all other playing decks in sync while the crossfade decks are
+        # the only ones included in the audible output.
+        self._advance_non_audible_decks(frames, handled_deck_ids)
+
+        # Create output buffer
+        output = self.audio_engine.create_silence(frames)
+
+        # Apply crossfade with linear interpolation across the frame block
+        fade_curve = np.linspace(fade_start, fade_end, frames).reshape(-1, 1)
+
+        if from_audio is not None:
+            # Fade out: volume goes from (1 - fade_start) to (1 - fade_end)
+            from_volume = 1.0 - fade_curve
+            output += from_audio * from_volume
+
+        if to_audio is not None:
+            # Fade in: volume goes from fade_start to fade_end
+            to_volume = fade_curve
+            output += to_audio * to_volume
+
+        # Check if crossfade is complete
+        if self._crossfade_samples_done >= self._crossfade_samples_total:
+            self._finish_crossfade()
+
+        # Apply soft clipping to prevent distortion
+        output = np.tanh(output)
+
+        return output.astype(np.float32)
+
+    def _start_crossfade(self, from_deck_index: int, to_deck_index: int):
+        """
+        Start a crossfade transition between two decks.
+
+        Args:
+            from_deck_index: Index of deck to fade out
+            to_deck_index: Index of deck to fade in
+        """
+        self._crossfade_from_deck = from_deck_index
+        self._crossfade_to_deck = to_deck_index
+        self._crossfade_samples_total = int(self.crossfade_duration * self.audio_engine.sample_rate)
+        self._crossfade_samples_done = 0
+        self._crossfade_active = True
+
+    def _finish_crossfade(self):
+        """Complete the crossfade transition"""
+        self._crossfade_active = False
+        # Update active deck to the target
+        self.active_deck_index = self._crossfade_to_deck
+
+        if self.on_active_deck_change:
+            self.on_active_deck_change(self._crossfade_from_deck, self._crossfade_to_deck)
+
+        if self.mode == MODE_AUTOMATIC:
+            self._announce_auto_switch(self._crossfade_to_deck)
+
+    def _mix_switch_intro(self, base_audio: np.ndarray, frames: int) -> np.ndarray:
+        """Overlay the currently active switch-intro clip onto the base output."""
+        intro_audio = self._get_switch_intro_audio(frames)
+        if intro_audio is None:
+            return base_audio
+        return self.audio_engine.mix_audio([base_audio, intro_audio])
+
+    def _get_switch_intro_audio(self, frames: int) -> Optional[np.ndarray]:
+        """Render one block from the active switch-intro clip."""
+        if self._switch_intro_audio is None:
+            return None
+
+        audio_data = self._switch_intro_audio
+        start = self._switch_intro_position
+        if start >= len(audio_data):
+            self._switch_intro_audio = None
+            self._switch_intro_position = 0
+            return None
+
+        end = start + frames
+        if end > len(audio_data):
+            chunk = audio_data[start:]
+            padding = np.zeros((end - len(audio_data), 2), dtype=np.float32)
+            chunk = np.vstack([chunk, padding])
+            self._switch_intro_audio = None
+            self._switch_intro_position = 0
+        else:
+            chunk = audio_data[start:end]
+            self._switch_intro_position = end
+
+        return chunk.astype(np.float32, copy=False)
+
+    def _start_switch_intro(self, deck: Deck) -> bool:
+        """Load and start the configured intro clip for a deck."""
+        intro_file = getattr(deck, 'intro_file', None)
+        if not intro_file:
+            self._switch_intro_audio = None
+            self._switch_intro_position = 0
+            return False
+
+        audio_data = self._switch_intro_cache.get(intro_file)
+        if audio_data is None:
+            result = self.audio_engine.load_audio_file(intro_file)
+            if not result:
+                logger.warning(f"Failed to load intro file for Deck {deck.deck_id}: {intro_file}")
+                self._switch_intro_audio = None
+                self._switch_intro_position = 0
+                return False
+            audio_data, _, _ = result
+            self._switch_intro_cache[intro_file] = audio_data
+
+        self._switch_intro_audio = audio_data
+        self._switch_intro_position = 0
+        return True
+
+    def _get_deck_audio(self, deck: Deck, frames: int) -> Optional[np.ndarray]:
+        """
+        Get audio from a deck for the current frame.
+
+        Args:
+            deck: Deck instance
+            frames: Number of frames needed
+
+        Returns:
+            Audio data or None
+        """
+        try:
+            # Handle streaming audio
+            if deck.is_stream and deck.stream_handler:
+                # Get audio from stream handler
+                chunk = deck.stream_handler.get_audio_data(frames)
+                if chunk is None:
+                    # No data available, return silence
+                    self._decay_deck_rms(deck)
+                    return self.audio_engine.create_silence(frames)
+
+                # Apply volume and balance
+                left_vol, right_vol = deck.get_left_right_volumes()
+                chunk = self.audio_engine.apply_volume_and_balance(chunk, left_vol, right_vol)
+
+                # Apply per-deck effects
+                if deck.effects:
+                    chunk = deck.effects.process(chunk)
+
+                self._update_deck_rms(deck, chunk)
+                return chunk
+
+            # Check if audio is cached (do NOT load in audio callback to prevent underflows)
+            cached_generation = self._loaded_audio_cache_generations.get(deck.deck_id)
+            if (
+                deck.deck_id not in self._loaded_audio_cache
+                or cached_generation != deck.source_generation
+            ):
+                # Audio not preloaded - return silence to prevent underflow
+                # Audio should be loaded via ensure_deck_loaded() before playback
+                self._decay_deck_rms(deck)
+                return self.audio_engine.create_silence(frames)
+
+            audio_data = self._loaded_audio_cache.get(deck.deck_id)
+            if audio_data is None:
+                self._decay_deck_rms(deck)
+                return None
+
+            # Get audio chunk at current position
+            start = deck.position
+            end = start + frames
+
+            # Handle end of file
+            if start >= len(audio_data):
+                if deck.loop:
+                    deck.position = 0
+                    start = 0
+                    end = frames
+                else:
+                    deck.stop()
+                    if deck.on_playback_end:
+                        deck.on_playback_end(deck.deck_id)
+                    self._decay_deck_rms(deck)
+                    return None
+
+            # Extract chunk
+            if end > len(audio_data):
+                if deck.loop:
+                    # Loop back to beginning
+                    chunk1 = audio_data[start:]
+                    remaining = end - len(audio_data)
+                    chunk2 = audio_data[:remaining]
+                    chunk = np.vstack([chunk1, chunk2])
+                    deck.position = remaining
+                else:
+                    # Pad with silence
+                    chunk = audio_data[start:]
+                    padding = np.zeros((end - len(audio_data), 2), dtype=np.float32)
+                    chunk = np.vstack([chunk, padding])
+                    deck.position = len(audio_data)
+            else:
+                chunk = audio_data[start:end]
+                deck.position = end
+
+            # Apply volume and balance
+            left_vol, right_vol = deck.get_left_right_volumes()
+            chunk = self.audio_engine.apply_volume_and_balance(chunk, left_vol, right_vol)
+
+            # Apply per-deck effects
+            if deck.effects:
+                chunk = deck.effects.process(chunk)
+
+            self._update_deck_rms(deck, chunk)
+            return chunk
+
+        except Exception as e:
+            logger.error(f"Error getting deck audio: {e}")
+            return None
+
+    # --- Level metering ---
+
+    @staticmethod
+    def _update_deck_rms(deck: Deck, audio_data: np.ndarray):
+        """Update RMS level on deck from processed audio data."""
+        rms = np.sqrt(np.mean(audio_data ** 2))
+        deck.rms_level = 0.3 * rms + 0.7 * deck.rms_level
+        if deck.rms_level > 1e-6:
+            deck.rms_level_db = max(-60.0, 20 * np.log10(deck.rms_level))
+        else:
+            deck.rms_level_db = -60.0
+
+    @staticmethod
+    def _decay_deck_rms(deck: Deck):
+        """Decay RMS level for decks not producing audio."""
+        deck.rms_level *= 0.8
+        if deck.rms_level > 1e-6:
+            deck.rms_level_db = max(-60.0, 20 * np.log10(deck.rms_level))
+        else:
+            deck.rms_level_db = -60.0
+
+    # --- Per-deck recording ---
+
+    def set_recorder_config(self, config: dict):
+        """
+        Store recorder configuration for creating per-deck recorders.
+
+        Args:
+            config: Dict with keys: sample_rate, channels, bit_depth, format, bitrate, pre_roll_seconds
+        """
+        self._recorder_config = config
+
+    def start_deck_recording(self, deck_id: int, output_directory: str) -> bool:
+        """
+        Start recording a specific deck's output to a separate file.
+
+        Args:
+            deck_id: Stable runtime deck ID
+            output_directory: Directory to save the recording
+
+        Returns:
+            True if recording started successfully
+        """
+        if deck_id in self.deck_recorders and self.deck_recorders[deck_id].is_recording:
+            return False
+
+        deck = self.get_deck_by_id(deck_id)
+        if not deck:
+            return False
+
+        config = self._recorder_config
+        if not config:
+            return False
+
+        try:
+            recorder = Recorder(
+                sample_rate=config.get('sample_rate', 44100),
+                channels=config.get('channels', 2),
+                bit_depth=config.get('bit_depth', 16),
+                format=config.get('format', 'wav'),
+                bitrate=config.get('bitrate', 192),
+                pre_roll_seconds=config.get('pre_roll_seconds', 30.0),
+            )
+
+            # Set up callbacks
+            def on_started(filepath):
+                if self.on_deck_recording_started:
+                    self.on_deck_recording_started(deck_id, filepath)
+
+            def on_stopped(filepath, frames):
+                if self.on_deck_recording_stopped:
+                    self.on_deck_recording_stopped(deck_id, filepath, frames)
+
+            recorder.on_recording_started = on_started
+            recorder.on_recording_stopped = on_stopped
+
+            self.deck_recorders[deck_id] = recorder
+
+            # Generate full output file path with deck name
+            deck_name = sanitize_filename(deck.name)
+            deck_number = self.index_of_deck(deck_id) + 1
+            prefix = f"deck{deck_number}_{deck_name}"
+            fmt = config.get('format', 'wav')
+            filename = generate_recording_filename(fmt, prefix)
+            output_file = str(Path(output_directory) / filename)
+
+            if not recorder.start_recording(output_file=output_file):
+                del self.deck_recorders[deck_id]
+                return False
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to start deck {deck_id} recording: {e}")
+            if deck_id in self.deck_recorders:
+                del self.deck_recorders[deck_id]
+            return False
+
+    def stop_deck_recording(self, deck_id: int):
+        """
+        Stop recording a specific deck.
+
+        Args:
+            deck_id: Stable runtime deck ID
+        """
+        recorder = self.deck_recorders.get(deck_id)
+        if recorder:
+            try:
+                if recorder.is_recording:
+                    recorder.stop_recording()
+            except Exception as e:
+                logger.error(f"Error stopping deck {deck_id} recording: {e}")
+            finally:
+                del self.deck_recorders[deck_id]
+
+    def is_deck_recording(self, deck_id: int) -> bool:
+        """Check if a specific deck is being recorded."""
+        recorder = self.deck_recorders.get(deck_id)
+        return recorder is not None and recorder.is_recording
+
+    def stop_all_deck_recordings(self):
+        """Stop all active per-deck recordings."""
+        for deck_id in list(self.deck_recorders.keys()):
+            self.stop_deck_recording(deck_id)
+
+    def _feed_deck_recorder(self, deck_id: int, audio_data):
+        """
+        Feed audio data to a deck's recorder for writing or pre-roll buffering.
+
+        Args:
+            deck_id: Stable runtime deck ID
+            audio_data: Audio data as numpy array
+        """
+        recorder = self.deck_recorders.get(deck_id)
+        if recorder:
+            try:
+                if recorder.is_recording:
+                    recorder.write_frames(audio_data)
+                else:
+                    recorder.buffer_frames(audio_data)
+            except Exception as e:
+                logger.error(f"Error feeding deck {deck_id} recorder: {e}")
+
+    def _advance_non_audible_decks(self, frames: int, exclude_deck_ids: set):
+        """
+        Advance playing decks that are not part of the current audible output.
+
+        Rendering and discarding these blocks keeps playback positions, streams,
+        effects, level meters, and optional per-deck recorders current while solo
+        and automatic modes keep those decks inaudible.
+
+        Args:
+            frames: Number of frames to generate
+            exclude_deck_ids: Set of deck IDs already handled
+        """
+        for deck in self.deck_snapshot():
+            if deck.deck_id in exclude_deck_ids:
+                continue
+            if deck.is_playing:
+                audio = self._get_deck_audio(deck, frames)
+                if audio is not None:
+                    self._feed_deck_recorder(deck.deck_id, audio)
+            elif not deck.is_playing:
+                self._decay_deck_rms(deck)
+
+    def set_mode(self, mode: str):
+        """
+        Set operating mode.
+
+        Args:
+            mode: MODE_MIXER, MODE_SOLO, or MODE_AUTOMATIC
+        """
+        if mode == self.mode:
+            return
+
+        old_mode = self.mode
+        self.mode = mode
+
+        # Handle automatic mode
+        if mode == MODE_AUTOMATIC:
+            self._start_automatic_switching()
+        else:
+            self._stop_automatic_switching()
+
+        self._apply_output_mode()
+
+        if self.on_mode_change:
+            self.on_mode_change(old_mode, mode)
+
+    def set_active_deck(self, deck_index: int, trigger_switch_event: bool = False) -> bool:
+        """Thread-safe wrapper for changing the active deck."""
+        with self._decks_lock:
+            return self._set_active_deck(deck_index, trigger_switch_event)
+
+    def _set_active_deck(self, deck_index: int, trigger_switch_event: bool = False) -> bool:
+        """
+        Set active deck for Solo/Automatic modes.
+
+        Args:
+            deck_index: Deck index (0-based)
+            trigger_switch_event: Start a deck intro when manually switching in solo mode
+
+        Returns:
+            True if a deck intro was started, otherwise False
+        """
+        if 0 <= deck_index < len(self.decks):
+            old_index = self.active_deck_index
+            if old_index == deck_index:
+                return False
+
+            self.active_deck_index = deck_index
+            intro_started = False
+
+            if trigger_switch_event and self.mode == MODE_SOLO:
+                intro_started = self._start_switch_intro(self.decks[deck_index])
+
+            if self.on_active_deck_change:
+                self.on_active_deck_change(old_index, deck_index)
+
+            return intro_started
+
+        return False
+
+    def next_deck(self, use_crossfade: bool = None, trigger_switch_event: bool = False) -> bool:
+        """Thread-safe wrapper for selecting the next deck."""
+        with self._decks_lock:
+            return self._next_deck(use_crossfade, trigger_switch_event)
+
+    def _next_deck(self, use_crossfade: bool = None, trigger_switch_event: bool = False) -> bool:
+        """
+        Switch to next deck (Solo/Automatic mode).
+        In Automatic mode, only switches to decks that have content loaded.
+
+        Args:
+            use_crossfade: Whether to use crossfade (None = auto based on mode and settings)
+            trigger_switch_event: Start a deck intro when manually switching in solo mode
+
+        Returns:
+            True if a deck intro was started, otherwise False
+        """
+        if not self.decks:
+            return False
+
+        # In automatic mode, only consider loaded decks
+        if self.mode == MODE_AUTOMATIC:
+            loaded_indices = self._get_loaded_deck_indices()
+            if len(loaded_indices) <= 1:
+                # No other loaded deck to switch to
+                return False
+
+            # Find current position in loaded list and get next
+            try:
+                current_pos = loaded_indices.index(self.active_deck_index)
+                next_pos = (current_pos + 1) % len(loaded_indices)
+                next_index = loaded_indices[next_pos]
+            except ValueError:
+                # Current deck not in loaded list, switch to first loaded
+                next_index = loaded_indices[0]
+        else:
+            next_index = (self.active_deck_index + 1) % len(self.decks)
+
+        # Determine if crossfade should be used
+        if use_crossfade is None:
+            use_crossfade = self.mode == MODE_AUTOMATIC and self.crossfade_enabled
+
+        if use_crossfade and not self._crossfade_active:
+            self._start_crossfade(self.active_deck_index, next_index)
+            return False
+        else:
+            return self.set_active_deck(next_index, trigger_switch_event=trigger_switch_event)
+
+    def previous_deck(self, use_crossfade: bool = None, trigger_switch_event: bool = False) -> bool:
+        """Thread-safe wrapper for selecting the previous deck."""
+        with self._decks_lock:
+            return self._previous_deck(use_crossfade, trigger_switch_event)
+
+    def _previous_deck(self, use_crossfade: bool = None, trigger_switch_event: bool = False) -> bool:
+        """
+        Switch to previous deck (Solo/Automatic mode).
+        In Automatic mode, only switches to decks that have content loaded.
+
+        Args:
+            use_crossfade: Whether to use crossfade (None = auto based on mode and settings)
+            trigger_switch_event: Start a deck intro when manually switching in solo mode
+
+        Returns:
+            True if a deck intro was started, otherwise False
+        """
+        if not self.decks:
+            return False
+
+        # In automatic mode, only consider loaded decks
+        if self.mode == MODE_AUTOMATIC:
+            loaded_indices = self._get_loaded_deck_indices()
+            if len(loaded_indices) <= 1:
+                # No other loaded deck to switch to
+                return False
+
+            # Find current position in loaded list and get previous
+            try:
+                current_pos = loaded_indices.index(self.active_deck_index)
+                prev_pos = (current_pos - 1) % len(loaded_indices)
+                prev_index = loaded_indices[prev_pos]
+            except ValueError:
+                # Current deck not in loaded list, switch to last loaded
+                prev_index = loaded_indices[-1]
+        else:
+            prev_index = (self.active_deck_index - 1) % len(self.decks)
+
+        # Determine if crossfade should be used
+        if use_crossfade is None:
+            use_crossfade = self.mode == MODE_AUTOMATIC and self.crossfade_enabled
+
+        if use_crossfade and not self._crossfade_active:
+            self._start_crossfade(self.active_deck_index, prev_index)
+            return False
+        else:
+            return self.set_active_deck(prev_index, trigger_switch_event=trigger_switch_event)
+
+    def set_master_volume(self, volume: float):
+        """
+        Set master volume.
+
+        Args:
+            volume: Volume level (0.0 to 1.0)
+        """
+        self.master_volume = max(0.0, min(1.0, volume))
+
+    def get_deck(self, deck_index: int) -> Optional[Deck]:
+        """
+        Get deck by index.
+
+        Args:
+            deck_index: Deck index (0-based)
+
+        Returns:
+            Deck instance or None
+        """
+        with self._decks_lock:
+            if 0 <= deck_index < len(self.decks):
+                return self.decks[deck_index]
+        return None
+
+    def get_deck_by_id(self, deck_id: int) -> Optional[Deck]:
+        """
+        Get deck by ID.
+
+        Args:
+            deck_id: Stable runtime deck ID
+
+        Returns:
+            Deck instance or None
+        """
+        with self._decks_lock:
+            return next((deck for deck in self.decks if deck.deck_id == deck_id), None)
+
+    def _get_loaded_deck_indices(self) -> List[int]:
+        """
+        Get indices of decks that have content loaded.
+
+        Returns:
+            List of deck indices (0-based) that have files or streams loaded
+        """
+        loaded = []
+        for i, deck in enumerate(self.deck_snapshot()):
+            # Check if deck has content: either a file path or an active stream
+            if deck.file_path or (deck.is_stream and deck.stream_handler):
+                loaded.append(i)
+        return loaded
+
+    def clear_deck_cache(self, deck_id: int):
+        """Clear cached audio data for a deck"""
+        self._loaded_audio_cache.pop(deck_id, None)
+        self._loaded_audio_cache_generations.pop(deck_id, None)
+
+    def cache_deck_audio_if_current(self, deck: Deck, expected_generation: int,
+                                    expected_path: str, result: tuple) -> bool:
+        """Publish loaded audio only if the deck still refers to that source."""
+        audio_data, sample_rate, channels = result
+        with deck._lock:
+            if (
+                deck.source_generation != expected_generation
+                or deck.file_path != expected_path
+                or deck.is_stream
+            ):
+                return False
+            deck.audio_data = audio_data
+            deck.sample_rate = sample_rate
+            deck.channels = channels
+            self._loaded_audio_cache[deck.deck_id] = audio_data
+            self._loaded_audio_cache_generations[deck.deck_id] = expected_generation
+            return True
+
+    def get_deck_duration_seconds(self, deck: Deck) -> float:
+        """
+        Get deck duration in seconds from cached audio data.
+
+        Args:
+            deck: Deck instance
+
+        Returns:
+            Duration in seconds, or 0.0 if not available
+        """
+        if deck.is_stream:
+            return 0.0
+
+        # Try to get from cached audio data
+        audio_data = self._loaded_audio_cache.get(deck.deck_id)
+        if audio_data is not None:
+            return len(audio_data) / self.audio_engine.sample_rate
+
+        # Fallback to deck's own audio_data
+        return deck.get_duration_seconds()
+
+    def ensure_deck_loaded(self, deck: Deck) -> bool:
+        """
+        Ensure audio data is loaded for a deck before playback.
+        Call this before play() to prevent underflows.
+
+        Args:
+            deck: Deck instance to preload
+
+        Returns:
+            True if audio is ready, False otherwise
+        """
+        if deck.is_stream:
+            # Streams are handled differently, just check if handler exists
+            return deck.stream_handler is not None
+
+        expected_generation = deck.source_generation
+        expected_path = deck.file_path
+
+        if (
+            deck.deck_id in self._loaded_audio_cache
+            and self._loaded_audio_cache_generations.get(deck.deck_id) == expected_generation
+        ):
+            return True
+
+        self.clear_deck_cache(deck.deck_id)
+        if expected_path:
+            result = self.audio_engine.load_audio_file(expected_path)
+            if result:
+                return self.cache_deck_audio_if_current(
+                    deck, expected_generation, expected_path, result
+                )
+
+        return False
+
+    def play_all(self):
+        """Start playback on all loaded decks"""
+        for deck in self.deck_snapshot():
+            if deck.file_path:  # Only play decks that have content loaded
+                self.ensure_deck_loaded(deck)  # Preload to prevent underflow
+                deck.play()
+
+    def pause_all(self):
+        """Pause playback on all decks"""
+        for deck in self.deck_snapshot():
+            if deck.is_playing:
+                deck.pause()
+
+    def stop_all(self):
+        """Stop playback on all decks and reset positions"""
+        for deck in self.deck_snapshot():
+            deck.stop()
+
+    def toggle_play_pause_all(self):
+        """
+        Toggle play/pause for all decks.
+        If any deck is playing, pause all. Otherwise, play all loaded decks.
+        """
+        any_playing = any(deck.is_playing for deck in self.deck_snapshot())
+        if any_playing:
+            self.pause_all()
+        else:
+            self.play_all()
+
+    def is_any_playing(self) -> bool:
+        """Check if any deck is currently playing"""
+        return any(deck.is_playing for deck in self.deck_snapshot())
+
+    def _check_level_switch(self) -> Optional[int]:
+        """
+        Check if a non-active deck exceeds the level threshold while the
+        active deck is below it.
+
+        Returns:
+            Target deck index, or None if no switch should happen.
+        """
+        # Hold time not elapsed yet
+        if time.time() < self._level_hold_until:
+            return None
+
+        # Don't switch during crossfade
+        if self._crossfade_active:
+            return None
+
+        # Check active deck level
+        if 0 <= self.active_deck_index < len(self.decks):
+            active_deck = self.decks[self.active_deck_index]
+            if active_deck.rms_level_db >= self.level_threshold_db:
+                # Active deck is loud enough, no switch needed
+                return None
+
+        # Find the loudest non-active deck that exceeds threshold + hysteresis
+        trigger_level = self.level_threshold_db + self.level_hysteresis_db
+        best_index = None
+        best_db = -60.0
+
+        loaded_indices = self._get_loaded_deck_indices()
+        for idx in loaded_indices:
+            if idx == self.active_deck_index:
+                continue
+            deck = self.decks[idx]
+            if deck.is_playing and deck.rms_level_db > trigger_level and deck.rms_level_db > best_db:
+                best_db = deck.rms_level_db
+                best_index = idx
+
+        return best_index
+
+    def _announce_auto_switch(self, to_deck_index: int):
+        """Announce the newly active deck via TTS (automatic mode only)."""
+        if 0 <= to_deck_index < len(self.decks):
+            deck = self.decks[to_deck_index]
+            if self._start_switch_intro(deck):
+                return
+            if self.tts_manager is not None:
+                self.tts_manager.speak(deck.name)
+
+    def _start_automatic_switching(self):
+        """Start automatic deck switching"""
+        if self._auto_thread is None or not self._auto_thread.is_alive():
+            # Ensure active deck is a loaded deck
+            loaded_indices = self._get_loaded_deck_indices()
+            if loaded_indices and self.active_deck_index not in loaded_indices:
+                self.active_deck_index = loaded_indices[0]
+                if self.on_active_deck_change:
+                    self.on_active_deck_change(-1, self.active_deck_index)
+
+            self._auto_stop_event.clear()
+            self._auto_thread = threading.Thread(target=self._automatic_switch_loop, daemon=True)
+            self._auto_thread.start()
+
+    def _stop_automatic_switching(self):
+        """Stop automatic deck switching"""
+        if self._auto_thread is not None:
+            self._auto_stop_event.set()
+            self._auto_thread.join(timeout=1.0)
+            self._auto_thread = None
+
+    def _automatic_switch_loop(self):
+        """Automatic switching thread loop"""
+        while not self._auto_stop_event.is_set():
+            # Calculate wait time: if crossfade enabled, start it early so it completes on time
+            wait_time = self.auto_switch_interval
+            if self.crossfade_enabled:
+                wait_time = max(0.5, self.auto_switch_interval - self.crossfade_duration)
+
+            # Wait for the interval (check periodically to allow stopping)
+            elapsed = 0.0
+            level_triggered = False
+            while elapsed < wait_time and not self._auto_stop_event.is_set():
+                sleep_chunk = min(0.5, wait_time - elapsed)
+                time.sleep(sleep_chunk)
+                elapsed += sleep_chunk
+
+                # Check for level-based switching during wait
+                if self.level_switch_enabled:
+                    target = self._check_level_switch()
+                    if target is not None:
+                        if self.crossfade_enabled and not self._crossfade_active:
+                            self._start_crossfade(self.active_deck_index, target)
+                            # Announcement will follow in _finish_crossfade
+                        else:
+                            self.set_active_deck(target)
+                            self._announce_auto_switch(target)
+                        self._level_hold_until = time.time() + self.level_hold_time
+                        level_triggered = True
+                        break
+
+            if not self._auto_stop_event.is_set() and not level_triggered:
+                was_crossfading = self._crossfade_active
+                self.next_deck()  # Will use crossfade automatically in automatic mode
+                # Only announce now when no crossfade was started; crossfade path
+                # announces in _finish_crossfade once the transition completes.
+                if not self._crossfade_active and not was_crossfading:
+                    self._announce_auto_switch(self.active_deck_index)
+
+    def to_dict(self) -> dict:
+        """Export mixer configuration"""
+        return {
+            'mode': self.mode,
+            'master_volume': self.master_volume,
+            'auto_switch_interval': self.auto_switch_interval,
+            'crossfade_enabled': self.crossfade_enabled,
+            'crossfade_duration': self.crossfade_duration,
+            'level_switch_enabled': self.level_switch_enabled,
+            'level_threshold_db': self.level_threshold_db,
+            'level_hysteresis_db': self.level_hysteresis_db,
+            'level_hold_time': self.level_hold_time,
+        }
+
+    def get_master_effects_dict(self) -> dict:
+        """Export master effects configuration for project saving."""
+        return self.master_effects.to_dict()
+
+    def load_master_effects_dict(self, data: dict):
+        """Load master effects configuration from project data."""
+        self.master_effects.from_dict(data)
+
+    def from_dict(self, data: dict):
+        """Load mixer configuration"""
+        self.mode = data.get('mode', MODE_MIXER)
+        self.master_volume = float(data.get('master_volume', 0.8))
+        self.auto_switch_interval = int(data.get('auto_switch_interval', 10))
+        crossfade_val = data.get('crossfade_enabled', True)
+        self.crossfade_enabled = (crossfade_val.lower() == 'true') if isinstance(crossfade_val, str) else bool(crossfade_val)
+        self.crossfade_duration = float(data.get('crossfade_duration', 2.0))
+        level_switch_val = data.get('level_switch_enabled', False)
+        self.level_switch_enabled = (level_switch_val.lower() == 'true') if isinstance(level_switch_val, str) else bool(level_switch_val)
+        self.level_threshold_db = float(data.get('level_threshold_db', -30.0))
+        self.level_hysteresis_db = float(data.get('level_hysteresis_db', 3.0))
+        self.level_hold_time = float(data.get('level_hold_time', 3.0))
+        self._apply_output_mode()
+
+    def cleanup(self):
+        """Cleanup resources"""
+        self.stop_all_deck_recordings()
+        if self.streamer:
+            self.streamer.stop_streaming(notify=False)
+        self._stop_automatic_switching()
+        self._stop_multiroom_playback()
+        self.audio_engine.stop_stream()
+        self._loaded_audio_cache.clear()
+        self._loaded_audio_cache_generations.clear()
+        self._switch_intro_cache.clear()
+        self._switch_intro_audio = None
+        self._switch_intro_position = 0
+
+    def __del__(self):
+        """Cleanup on deletion"""
+        self.cleanup()

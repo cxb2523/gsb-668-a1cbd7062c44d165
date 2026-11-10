@@ -1,0 +1,631 @@
+"""
+Audio Deck - Individual deck logic for MultiDeck Audio Player
+"""
+
+import threading
+from pathlib import Path
+from typing import Optional, Callable
+
+from config.defaults import (
+    DECK_STATE_EMPTY, DECK_STATE_LOADED, DECK_STATE_PLAYING,
+    DECK_STATE_PAUSED, DECK_STATE_ERROR
+)
+from utils.logger import get_logger
+
+# Module logger
+logger = get_logger('deck')
+
+# Import StreamHandler with lazy loading to avoid circular imports
+_StreamHandler = None
+def _get_stream_handler_class():
+    global _StreamHandler
+    if _StreamHandler is None:
+        from audio.stream_handler import StreamHandler
+        _StreamHandler = StreamHandler
+    return _StreamHandler
+
+# Import SoundCardInputHandler with lazy loading to avoid circular imports
+_SoundCardInputHandler = None
+def _get_soundcard_input_handler_class():
+    global _SoundCardInputHandler
+    if _SoundCardInputHandler is None:
+        from audio.soundcard_input_handler import SoundCardInputHandler
+        _SoundCardInputHandler = SoundCardInputHandler
+    return _SoundCardInputHandler
+
+
+class Deck:
+    """
+    Represents a single audio deck with playback controls.
+    """
+
+    def __init__(self, deck_id: int, sample_rate: int = 44100, buffer_size: int = 2048):
+        """
+        Initialize a deck.
+
+        Args:
+            deck_id: Stable runtime identifier
+            sample_rate: Sample rate for audio playback
+            buffer_size: Audio engine block size (passed to SoundCardInputHandler)
+        """
+        self.deck_id = deck_id
+        self.name = f"Deck {deck_id}"
+        self.state = DECK_STATE_EMPTY
+        self._target_sample_rate = sample_rate  # Target sample rate for deck
+        self._buffer_size = buffer_size
+
+        # Audio properties
+        self.file_path: Optional[str] = None
+        self.intro_file: Optional[str] = None
+        self._project_file_original: Optional[str] = None
+        self._project_file_resolved: Optional[str] = None
+        self._project_intro_file_original: Optional[str] = None
+        self._project_intro_file_resolved: Optional[str] = None
+        self.is_stream = False
+        self.is_soundcard_input = False
+        self.soundcard_device_id: Optional[int] = None
+        self.soundcard_device_name: Optional[str] = None
+        self.output_device_id: Optional[int] = None
+        self.output_device_name: str = 'default'
+        self.audio_data = None
+        self.sample_rate = None  # Actual sample rate of loaded audio
+        self.channels = None
+        self.stream_handler = None  # For HTTP/HTTPS streaming or soundcard input
+        # Incremented whenever the source is replaced or unloaded.  Async audio
+        # loaders use this token to avoid publishing stale data for an old source.
+        self._source_generation = 0
+
+        # Playback controls
+        self.volume = 1.0  # 0.0 to 1.0
+        self.balance = 0.0  # -1.0 (left) to 1.0 (right)
+        self.mute = False
+        self.loop = False
+
+        # Playback state
+        self.position = 0  # Current position in samples
+        self.is_playing = False
+        self.is_paused = False
+
+        # Level metering (written by audio thread, read by GUI)
+        self.rms_level = 0.0      # Linear RMS 0.0-1.0
+        self.rms_level_db = -60.0  # RMS in dB
+
+        # Threading - use RLock to allow recursive locking (e.g., unload() calling stop())
+        self._lock = threading.RLock()
+        self._play_thread: Optional[threading.Thread] = None
+
+        # Effect chain (assigned by Mixer)
+        self.effects = None
+
+        # Callbacks
+        self.on_state_change: Optional[Callable] = None
+        self.on_playback_end: Optional[Callable] = None
+
+    def load_file(self, file_path: str) -> bool:
+        """
+        Load an audio file into the deck.
+
+        Args:
+            file_path: Path to audio file or URL
+
+        Returns:
+            True if loaded successfully, False otherwise
+        """
+        try:
+            with self._lock:
+                # Check if it's a URL (stream)
+                if file_path.startswith(('http://', 'https://')):
+                    self._prepare_source_replacement()
+
+                    # Create and start stream handler
+                    StreamHandler = _get_stream_handler_class()
+                    self.stream_handler = StreamHandler(file_path, self._target_sample_rate)
+
+                    # Set up stream handler callbacks
+                    def on_stream_error(error_msg):
+                        logger.error(f"Stream error on Deck {self.deck_id}: {error_msg}")
+                        self._set_state(DECK_STATE_ERROR)
+
+                    self.stream_handler.on_error = on_stream_error
+
+                    # Start streaming
+                    if self.stream_handler.start():
+                        self._clear_project_file_reference()
+                        self.is_stream = True
+                        self.file_path = file_path
+                        self.sample_rate = self._target_sample_rate
+                        self.channels = 2  # Streams are converted to stereo
+                        self._set_state(DECK_STATE_LOADED)
+                        return True
+                    else:
+                        logger.error(f"Failed to start stream on Deck {self.deck_id}")
+                        self.stream_handler = None
+                        self._set_state(DECK_STATE_ERROR)
+                        return False
+
+                # Load local file
+                path = Path(file_path)
+                if not path.exists():
+                    raise FileNotFoundError(f"File not found: {file_path}")
+
+                self._prepare_source_replacement()
+                self._clear_project_file_reference()
+                self.is_stream = False
+                self.file_path = file_path
+
+                # Audio loading will be handled by AudioEngine
+                # For now, just mark as loaded
+                self._set_state(DECK_STATE_LOADED)
+                self.position = 0
+                return True
+
+        except Exception as e:
+            logger.error(f"Error loading file in Deck {self.deck_id}: {e}")
+            self._set_state(DECK_STATE_ERROR)
+            return False
+
+    def load_soundcard_input(self, device_id: int, device_name: str) -> bool:
+        """
+        Load a sound card input device as the audio source for this deck.
+
+        Args:
+            device_id: sounddevice device index
+            device_name: Human-readable device name
+
+        Returns:
+            True if successfully opened, False otherwise
+        """
+        try:
+            with self._lock:
+                self._prepare_source_replacement()
+
+                SoundCardInputHandler = _get_soundcard_input_handler_class()
+                handler = SoundCardInputHandler(
+                    device_id, device_name, self._target_sample_rate, self._buffer_size
+                )
+
+                def on_input_error(error_msg):
+                    logger.error(f"Soundcard input error on Deck {self.deck_id}: {error_msg}")
+                    self._set_state(DECK_STATE_ERROR)
+
+                handler.on_error = on_input_error
+
+                if handler.start():
+                    self._clear_project_file_reference()
+                    self.stream_handler = handler
+                    self.is_stream = True
+                    self.is_soundcard_input = True
+                    self.soundcard_device_id = device_id
+                    self.soundcard_device_name = device_name
+                    self.file_path = f"[Input] {device_name}"
+                    self.sample_rate = self._target_sample_rate
+                    self.channels = 2
+                    self._set_state(DECK_STATE_LOADED)
+                    return True
+                else:
+                    logger.error(f"Failed to open soundcard input on Deck {self.deck_id}")
+                    self._set_state(DECK_STATE_ERROR)
+                    return False
+
+        except Exception as e:
+            logger.error(f"Error loading soundcard input in Deck {self.deck_id}: {e}")
+            self._set_state(DECK_STATE_ERROR)
+            return False
+
+    def unload(self):
+        """Unload audio from deck"""
+        with self._lock:
+            self._prepare_source_replacement()
+            self._clear_project_file_reference()
+            self._clear_project_intro_reference()
+            self._set_state(DECK_STATE_EMPTY)
+
+    def _prepare_source_replacement(self):
+        """Stop and forget the current source before installing another one."""
+        self.stop()
+        if self.stream_handler:
+            self.stream_handler.stop()
+
+        self.stream_handler = None
+        self.file_path = None
+        self.audio_data = None
+        self.sample_rate = None
+        self.channels = None
+        self.position = 0
+        self.is_stream = False
+        self.is_soundcard_input = False
+        self.soundcard_device_id = None
+        self.soundcard_device_name = None
+        self._source_generation += 1
+
+    @property
+    def source_generation(self) -> int:
+        """Return the token identifying the currently selected source."""
+        # This is read from the real-time audio callback, where waiting on a
+        # source shutdown lock could cause an audible output underflow.
+        return self._source_generation
+
+    def set_output_device(self, device_id: Optional[int], device_name: Optional[str] = None):
+        """
+        Set the preferred output device for this deck.
+
+        Args:
+            device_id: Output device index, or None for global/default routing
+            device_name: Human-readable device name for persistence/UI
+        """
+        self.output_device_id = device_id
+        self.output_device_name = device_name or 'default'
+
+    def play(self) -> bool:
+        """
+        Start playback.
+
+        Returns:
+            True if playback started, False otherwise
+        """
+        if self.state == DECK_STATE_EMPTY:
+            return False
+
+        with self._lock:
+            if self.is_playing:
+                return True
+
+            self.is_playing = True
+            self.is_paused = False
+            self._set_state(DECK_STATE_PLAYING)
+            return True
+
+    def pause(self):
+        """Pause playback"""
+        with self._lock:
+            if self.is_playing:
+                self.is_playing = False
+                self.is_paused = True
+                self._set_state(DECK_STATE_PAUSED)
+
+    def stop(self):
+        """Stop playback and reset position"""
+        with self._lock:
+            self.is_playing = False
+            self.is_paused = False
+            self.position = 0
+            if self.state not in [DECK_STATE_EMPTY, DECK_STATE_ERROR]:
+                self._set_state(DECK_STATE_LOADED)
+
+    def toggle_play_pause(self):
+        """Toggle between play and pause"""
+        if self.is_playing:
+            self.pause()
+        else:
+            self.play()
+
+    def set_volume(self, volume: float):
+        """
+        Set deck volume.
+
+        Args:
+            volume: Volume level (0.0 to 1.0)
+        """
+        self.volume = max(0.0, min(1.0, volume))
+
+    def set_balance(self, balance: float):
+        """
+        Set stereo balance.
+
+        Args:
+            balance: Balance (-1.0 left to 1.0 right)
+        """
+        self.balance = max(-1.0, min(1.0, balance))
+
+    def set_mute(self, mute: bool):
+        """Set mute state"""
+        self.mute = mute
+
+    def toggle_mute(self):
+        """Toggle mute state"""
+        self.mute = not self.mute
+
+    def set_loop(self, loop: bool):
+        """Set loop state"""
+        self.loop = loop
+
+    def toggle_loop(self):
+        """Toggle loop state"""
+        self.loop = not self.loop
+
+    def seek(self, position_seconds: float):
+        """
+        Seek to position in seconds.
+        Only works for local files, not streams.
+
+        Args:
+            position_seconds: Target position in seconds
+        """
+        if self.is_stream or self.sample_rate is None:
+            return
+
+        with self._lock:
+            position_samples = int(position_seconds * self.sample_rate)
+            self.seek_samples(position_samples)
+
+    def seek_samples(self, position_samples: int):
+        """
+        Seek to position in samples.
+        Only works for local files, not streams.
+
+        Args:
+            position_samples: Target position in samples
+        """
+        if self.is_stream:
+            return
+
+        with self._lock:
+            # Clamp to valid range
+            if self.audio_data is not None:
+                max_position = len(self.audio_data)
+                self.position = max(0, min(position_samples, max_position))
+            else:
+                self.position = max(0, position_samples)
+
+    def seek_relative(self, delta_seconds: float):
+        """
+        Seek relative to current position.
+        Only works for local files, not streams.
+
+        Args:
+            delta_seconds: Seconds to seek (positive = forward, negative = backward)
+        """
+        if self.is_stream or self.sample_rate is None:
+            return
+
+        current_seconds = self.get_position_seconds()
+        self.seek(current_seconds + delta_seconds)
+
+    def get_position_seconds(self) -> float:
+        """
+        Get current playback position in seconds.
+
+        Returns:
+            Current position in seconds, or 0.0 if not available
+        """
+        if self.sample_rate is None or self.sample_rate == 0:
+            return 0.0
+        return self.position / self.sample_rate
+
+    def get_duration_seconds(self) -> float:
+        """
+        Get total duration in seconds.
+
+        Returns:
+            Duration in seconds, or 0.0 if not available
+        """
+        if self.audio_data is None or self.sample_rate is None or self.sample_rate == 0:
+            return 0.0
+        return len(self.audio_data) / self.sample_rate
+
+    def can_seek(self) -> bool:
+        """
+        Check if seeking is supported for this deck.
+
+        Returns:
+            True if seeking is possible (local file loaded), False otherwise
+        """
+        return not self.is_stream and self.audio_data is not None
+
+    def set_name(self, name: str):
+        """Set custom deck name"""
+        self.name = name
+
+    def set_intro_file(self, intro_file: Optional[str]):
+        """Assign an optional intro file that can be played on deck switches."""
+        self._clear_project_intro_reference()
+        self.intro_file = intro_file or None
+
+    def _clear_project_file_reference(self):
+        """Forget the project path that produced the current main source."""
+        self._project_file_original = None
+        self._project_file_resolved = None
+
+    def _clear_project_intro_reference(self):
+        """Forget the project path that produced the current intro source."""
+        self._project_intro_file_original = None
+        self._project_intro_file_resolved = None
+
+    def _remember_project_paths(self, data: dict):
+        """Remember original project paths for lossless re-saving."""
+        self._project_file_original = data.get('_project_file_original')
+        self._project_file_resolved = data.get('_project_file_resolved')
+        self._project_intro_file_original = data.get('_project_intro_file_original')
+        self._project_intro_file_resolved = data.get('_project_intro_file_resolved')
+
+    def _path_matches(self, current: Optional[str], loaded: Optional[str]) -> bool:
+        if not current or not loaded:
+            return current == loaded
+
+        if current.startswith(('http://', 'https://')) or loaded.startswith(('http://', 'https://')):
+            return current == loaded
+
+        try:
+            return Path(current).expanduser().resolve() == Path(loaded).expanduser().resolve()
+        except (OSError, RuntimeError, ValueError):
+            return current == loaded
+
+    def _project_file_for_save(self) -> str:
+        if (
+            self._project_file_original is not None
+            and self._path_matches(self.file_path, self._project_file_resolved)
+        ):
+            return self._project_file_original
+        return self.file_path or ''
+
+    def _project_intro_file_for_save(self) -> str:
+        if (
+            self._project_intro_file_original is not None
+            and self._path_matches(self.intro_file, self._project_intro_file_resolved)
+        ):
+            return self._project_intro_file_original
+        return self.intro_file or ''
+
+    def get_effective_volume(self) -> float:
+        """
+        Get effective volume considering mute state.
+
+        Returns:
+            Effective volume (0.0 if muted)
+        """
+        return 0.0 if self.mute else self.volume
+
+    def get_left_right_volumes(self) -> tuple[float, float]:
+        """
+        Calculate left and right channel volumes based on balance.
+
+        Returns:
+            Tuple of (left_volume, right_volume)
+        """
+        effective_volume = self.get_effective_volume()
+
+        if self.balance <= 0:
+            # Balance to left
+            left = effective_volume
+            right = effective_volume * (1.0 + self.balance)
+        else:
+            # Balance to right
+            left = effective_volume * (1.0 - self.balance)
+            right = effective_volume
+
+        return left, right
+
+    def _set_state(self, new_state: str):
+        """
+        Set deck state and trigger callback.
+
+        Args:
+            new_state: New state value
+        """
+        old_state = self.state
+        self.state = new_state
+
+        if old_state != new_state and self.on_state_change:
+            try:
+                self.on_state_change(self.deck_id, old_state, new_state)
+            except Exception as e:
+                logger.error(f"Error in state change callback: {e}")
+
+    def to_dict(self) -> dict:
+        """
+        Export deck configuration for saving to project file.
+
+        Returns:
+            Dictionary with deck configuration
+        """
+        if self.state == DECK_STATE_EMPTY and not self.intro_file:
+            return {
+                'name': self.name,
+                'output_device_id': self.output_device_id,
+                'output_device_name': self.output_device_name,
+                'volume': self.volume,
+                'balance': self.balance,
+                'mute': self.mute,
+                'loop': self.loop,
+            }
+
+        if self.is_soundcard_input:
+            return {
+                'name': self.name,
+                'intro_file': self._project_intro_file_for_save(),
+                'source_type': 'soundcard_input',
+                'soundcard_device_id': self.soundcard_device_id,
+                'soundcard_device_name': self.soundcard_device_name or '',
+                'output_device_id': self.output_device_id,
+                'output_device_name': self.output_device_name,
+                'volume': self.volume,
+                'balance': self.balance,
+                'mute': self.mute,
+                'loop': self.loop,
+            }
+
+        return {
+            'name': self.name,
+            'intro_file': self._project_intro_file_for_save(),
+            'file': self._project_file_for_save(),
+            'output_device_id': self.output_device_id,
+            'output_device_name': self.output_device_name,
+            'volume': self.volume,
+            'balance': self.balance,
+            'mute': self.mute,
+            'loop': self.loop,
+        }
+
+    def get_effects_dict(self) -> dict:
+        """Export per-deck effects configuration for project saving."""
+        if self.effects:
+            return self.effects.to_dict()
+        return {}
+
+    def load_effects_dict(self, data: dict):
+        """Load per-deck effects configuration from project data."""
+        if self.effects and data:
+            self.effects.from_dict(data)
+
+    def from_dict(self, data: dict) -> bool:
+        """
+        Load deck configuration from dictionary.
+
+        Args:
+            data: Dictionary with deck configuration
+
+        Returns:
+            True if loaded successfully
+        """
+        try:
+            if not data:
+                return False
+
+            self.name = data.get('name', f"Deck {self.deck_id}")
+            self.set_intro_file(data.get('intro_file'))
+            self.volume = float(data.get('volume', 1.0))
+            self.balance = float(data.get('balance', 0.0))
+            self.mute = bool(data.get('mute', False))
+            self.loop = bool(data.get('loop', False))
+            raw_output_id = data.get('output_device_id')
+            try:
+                output_device_id = int(raw_output_id) if raw_output_id not in (None, '', 'default') else None
+            except (ValueError, TypeError):
+                output_device_id = None
+            output_device_name = data.get('output_device_name', 'default')
+            self.set_output_device(output_device_id, output_device_name)
+
+            # Soundcard input source
+            if data.get('source_type') == 'soundcard_input':
+                device_name = data.get('soundcard_device_name', '')
+                # device_id may be stored as string in INI files
+                raw_id = data.get('soundcard_device_id')
+                try:
+                    device_id = int(raw_id) if raw_id is not None else None
+                except (ValueError, TypeError):
+                    device_id = None
+
+                if device_id is None or not device_name:
+                    logger.warning(f"Deck {self.deck_id}: incomplete soundcard config in project file")
+                    return False
+
+                # Try to reconnect; if device_id is no longer valid, the handler will report error
+                loaded = self.load_soundcard_input(device_id, device_name)
+                self._remember_project_paths(data)
+                return loaded
+
+            # File or stream source (original behaviour)
+            if 'file' not in data or not data['file']:
+                self._remember_project_paths(data)
+                return bool(self.intro_file)
+
+            loaded = self.load_file(data['file'])
+            self._remember_project_paths(data)
+            return loaded
+
+        except Exception as e:
+            logger.error(f"Error loading deck from dict: {e}")
+            return False
+
+    def __repr__(self) -> str:
+        return f"<Deck {self.deck_id}: {self.name} ({self.state})>"

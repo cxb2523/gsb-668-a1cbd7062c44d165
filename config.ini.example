@@ -1,0 +1,77 @@
+[General]
+language = system
+theme = system
+deck_count = 10
+remember_last_project = False
+last_project_file =
+
+[Audio]
+# Use "null" for livestream-only operation without a physical sound device
+output_device = default
+buffer_size = 2048
+sample_rate = 48000
+
+[Automation]
+switch_interval = 10
+crossfade_duration = 2.0
+crossfade_enabled = True
+level_switch_enabled = False
+level_threshold_db = -30
+level_hysteresis_db = 3
+level_hold_time = 3
+
+[UI]
+show_statusbar = True
+show_level_meter = True
+deck_list_focus = True
+deck_list_type = auto
+window_width = 1200
+window_height = 800
+
+[Recorder]
+format = wav
+output_directory = 
+bit_depth = 16
+bitrate = 192
+pre_roll_seconds = 30
+
+[Streaming]
+auto_reconnect = True
+reconnect_wait = 5
+max_reconnect_attempts = 5
+connection_timeout = 10
+read_timeout = 30
+server = 
+port = 8000
+mountpoint = /stream
+credentials = 
+codec = mp3
+bitrate = 192
+name = MultiDeck Live
+description = 
+genre = Various
+url = 
+public = False
+connect_at_startup = False
+queue_blocks = 128
+writer_poll_ms = 100
+ffmpeg_close_timeout = 5.0
+ffmpeg_loglevel = error
+
+[Recent]
+max_recent_items = 10
+
+[RecentFiles]
+
+[Logging]
+# Log levels: DEBUG, INFO, WARNING, ERROR, CRITICAL
+level = INFO
+file_logging = True
+console_logging = False
+
+[TTS]
+tts_enabled = False
+tts_engine = 
+tts_voice = 
+tts_rate = 0
+tts_volume = -1
