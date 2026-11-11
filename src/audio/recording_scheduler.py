@@ -47,11 +47,12 @@ def schedules_from_dict(data):
         enabled = data[prefix + 'enabled'].strip().lower()
         if enabled not in ('true', 'false', '1', '0', 'yes', 'no', 'on', 'off'):
             raise ValueError(f'Invalid enabled value in slot {slot}.')
+        days = [day.strip() for day in
+                data[prefix + 'weekdays'].split('#', 1)[0].split(',')]
         result.append(RecordingSchedule(
             start_time=data[prefix + 'start_time'].strip(),
             end_time=data[prefix + 'end_time'].strip(),
-            weekdays=tuple(sorted({int(day.strip()) for day in
-                                  data[prefix + 'weekdays'].split('#', 1)[0].split(',')})),
+            weekdays=tuple(sorted({int(day) for day in days if day})),
             enabled=enabled in ('true', '1', 'yes', 'on'),
             name=data.get(prefix + 'name', ''),
             start_playback=data.get(prefix + 'start_playback', '').strip().lower()
@@ -98,7 +99,9 @@ class RecordingScheduler:
         for target in list(self._owned):
             if target not in active:
                 recorder = self._owned.pop(target)
-                if self._get_recorder(target) is recorder and recorder.is_recording:
+                if (recorder is not None
+                        and self._get_recorder(target) is recorder
+                        and recorder.is_recording):
                     self._stop(target)
         self._attempted.intersection_update(active)
         for target in active.keys() - self._attempted:
@@ -107,7 +110,9 @@ class RecordingScheduler:
             if recorder is not None and recorder.is_recording:
                 continue
             if self._start(target, active[target]):
-                self._owned[target] = self._get_recorder(target)
+                recorder = self._get_recorder(target)
+                if recorder is not None:
+                    self._owned[target] = recorder
 
     def release(self, target):
         """Detach a manually controlled recorder from automatic stopping."""
@@ -115,7 +120,9 @@ class RecordingScheduler:
 
     def reset(self):
         for target, recorder in list(self._owned.items()):
-            if self._get_recorder(target) is recorder and recorder.is_recording:
+            if (recorder is not None
+                    and self._get_recorder(target) is recorder
+                    and recorder.is_recording):
                 self._stop(target)
         self._owned.clear()
         self._attempted.clear()

@@ -67,6 +67,63 @@ class RecordingScheduleTests(unittest.TestCase):
         self.assertEqual(loaded['deck_schedules'], [[], schedules])
         self.assertEqual(schedules_from_dict(schedules_to_dict(schedules)), schedules)
 
+    def test_overnight_hit_and_miss_follow_start_day(self):
+        # Tuesday 2026-11-10, window 23:00 -> next day 02:00.
+        schedule = RecordingSchedule('23:00', '02:00', (2,))
+        self.assertTrue(schedule.is_active(datetime(2026, 11, 10, 23, 30)))
+        self.assertTrue(schedule.is_active(datetime(2026, 11, 11, 0, 30)))
+        self.assertTrue(schedule.is_active(datetime(2026, 11, 11, 1, 59, 59)))
+        # Window ends at 02:00 sharp, no jitter into Wednesday daytime.
+        self.assertFalse(schedule.is_active(datetime(2026, 11, 11, 2)))
+        self.assertFalse(schedule.is_active(datetime(2026, 11, 11, 23, 30)))
+        # Monday late evening must not match: the window would belong to
+        # Monday (weekday 1), which is not selected.
+        self.assertFalse(schedule.is_active(datetime(2026, 11, 9, 23, 30)))
+        # Tuesday 01:00 belongs to Monday's window, not Tuesday's.
+        self.assertFalse(schedule.is_active(datetime(2026, 11, 10, 1)))
+
+    def test_from_dict_rejects_invalid_enabled(self):
+        for value in ('', 'maybe', '2', 'enabled'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                schedules_from_dict({'slot1_enabled': value,
+                                     'slot1_start_time': '20:00',
+                                     'slot1_end_time': '22:00',
+                                     'slot1_weekdays': '1'})
+
+    def test_from_dict_rejects_invalid_times(self):
+        base = {'slot1_enabled': 'true', 'slot1_start_time': '20:00',
+                'slot1_end_time': '22:00', 'slot1_weekdays': '1'}
+        for key, value in (('slot1_start_time', '24:00'),
+                           ('slot1_start_time', '2:00'),
+                           ('slot1_start_time', 'ab:cd'),
+                           ('slot1_end_time', '20:00'),
+                           ('slot1_end_time', '22:60')):
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                schedules_from_dict({**base, key: value})
+
+    def test_from_dict_rejects_empty_or_out_of_range_weekdays(self):
+        base = {'slot1_enabled': 'true', 'slot1_start_time': '20:00',
+                'slot1_end_time': '22:00'}
+        for value in ('', '  # only a comment', '0', '8', '1,9', '-1'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                schedules_from_dict({**base, 'slot1_weekdays': value})
+
+    def test_from_dict_ignores_comment_and_blank_weekday_entries(self):
+        data = {'slot1_enabled': 'on', 'slot1_start_time': '20:00',
+                'slot1_end_time': '22:00',
+                'slot1_weekdays': ' 2, 1, 2, # Monday and Tuesday'}
+        self.assertEqual(schedules_from_dict(data),
+                         [RecordingSchedule(weekdays=(1, 2))])
+
+    def test_roundtrip_preserves_all_fields(self):
+        schedules = [RecordingSchedule('20:00', '22:00', (7, 1, 3), True,
+                                       name='Abend', start_playback=True),
+                     RecordingSchedule('23:00', '02:00', (6,), False,
+                                       name='', start_playback=False)]
+        loaded = schedules_from_dict(schedules_to_dict(schedules))
+        self.assertEqual(loaded, [replace(schedules[0], weekdays=(1, 3, 7)),
+                                  schedules[1]])
+
     def test_old_project_has_no_schedules(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'old.mdap'
@@ -95,6 +152,48 @@ class RecordingSchedulerTests(unittest.TestCase):
 
     def tick(self, hour, minute=0):
         self.scheduler.tick(datetime(2026, 11, 9, hour, minute))
+
+    def test_overnight_window_no_jitter_across_midnight(self):
+        # Monday 2026-11-09, window 23:00 -> Tuesday 02:00.
+        self.scheduler.schedules[None] = [RecordingSchedule('23:00', '02:00', (1,))]
+        self.scheduler.tick(datetime(2026, 11, 9, 22, 59))
+        self.assertEqual(self.starts, [])
+        self.scheduler.tick(datetime(2026, 11, 9, 23, 30))
+        self.assertEqual(self.starts, [None])
+        # Crossing midnight must neither restart nor stop the recording.
+        for moment in (datetime(2026, 11, 10, 0),
+                       datetime(2026, 11, 10, 0, 30),
+                       datetime(2026, 11, 10, 1, 59)):
+            self.scheduler.tick(moment)
+        self.assertEqual(self.starts, [None])
+        self.assertEqual(self.stops, [])
+        self.scheduler.tick(datetime(2026, 11, 10, 2))
+        self.assertEqual(self.stops, [None])
+        # Tuesday evening/morning must not re-arm the Monday window.
+        self.scheduler.tick(datetime(2026, 11, 10, 23, 30))
+        self.scheduler.tick(datetime(2026, 11, 11, 1))
+        self.assertEqual(self.starts, [None])
+
+    def test_same_target_overlap_does_not_stop_early(self):
+        self.scheduler.schedules[None] = [RecordingSchedule('20:00', '22:00'),
+                                          RecordingSchedule('21:00', '23:00')]
+        self.tick(20)
+        self.assertEqual(self.starts, [None])
+        # First window ends at 22:00 but the second is still active.
+        self.tick(22)
+        self.assertEqual(self.starts, [None])
+        self.assertEqual(self.stops, [])
+        self.tick(23)
+        self.assertEqual(self.stops, [None])
+
+    def test_failed_start_with_missing_recorder_does_not_crash(self):
+        self.recorders.clear()
+        self.scheduler._get_recorder = lambda target: None
+        self.scheduler._start = mock.Mock(return_value=True)
+        self.tick(20)
+        self.tick(22)  # window ends with nothing owned: no stop, no crash
+        self.scheduler.reset()
+        self.assertEqual(self.stops, [])
 
     def test_overlaps_and_independent_contexts(self):
         self.scheduler.schedules[None].append(RecordingSchedule('21:00', '23:00'))
